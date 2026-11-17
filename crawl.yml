@@ -1,0 +1,99 @@
+name: 今日说法自动增量
+
+on:
+  schedule:
+    # 定时用 UTC；北京时间 = UTC + 8
+    - cron: '0 5 * * *'    # 北京 13:00，央视约 12:38 上线当天节目
+    - cron: '0 14 * * *'   # 北京 22:00，兜底再跑一次
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '模式：auto=增量 / backfill=全量建档 / year=指定年份 / refresh=校正播放地址'
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - backfill
+          - year
+          - refresh
+      year:
+        description: 'mode=year 时的年份，例如 2026'
+        required: false
+        default: ''
+      month:
+        description: 'mode=year 时的月份 1-12，留空抓整年'
+        required: false
+        default: ''
+      limit:
+        description: '最多处理多少期（调试用，留空不限）'
+        required: false
+        default: ''
+      dry_run:
+        description: 'true = 只试跑不写盘'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write          # 必须：Actions 需要用 GITHUB_TOKEN 提交
+
+concurrency:
+  group: crawl-jrsf
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 组装参数
+        id: args
+        env:
+          MODE: ${{ github.event.inputs.mode }}
+          YEAR: ${{ github.event.inputs.year }}
+          MONTH: ${{ github.event.inputs.month }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          DRY: ${{ github.event.inputs.dry_run }}
+        run: |
+          MODE="${MODE:-auto}"
+          ARGS=""
+          if [ "$MODE" = "backfill" ]; then
+            ARGS="--backfill"
+          elif [ "$MODE" = "year" ]; then
+            ARGS="--year ${YEAR}"
+            if [ -n "${MONTH}" ]; then ARGS="$ARGS --month ${MONTH}"; fi
+          elif [ "$MODE" = "refresh" ]; then
+            ARGS="--refresh"
+          fi
+          if [ -n "${LIMIT}" ]; then ARGS="$ARGS --limit ${LIMIT}"; fi
+          if [ "${DRY}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          echo "本次参数：${ARGS:-<增量>}"
+
+      - name: 执行采集
+        run: python crawl.py ${{ steps.args.outputs.args }}
+
+      - name: 提交并推送
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ ! -f jrsf.json ]; then
+            echo "jrsf.json 不存在，跳过提交"
+            exit 0
+          fi
+          if git diff --quiet -- jrsf.json; then
+            echo "jrsf.json 无变化，跳过提交"
+            exit 0
+          fi
+          git add jrsf.json
+          git commit -m "chore: 更新今日说法节目单 $(date -u +%Y-%m-%d)"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push
