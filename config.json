@@ -1,0 +1,15 @@
+{
+  "sites": [
+    {
+      "key": "jrsf",
+      "name": "今日说法",
+      "type": 3,
+      "api": "https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/jrsf.js",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1,
+      "style": {"type": "rect", "ratio": 0.75},
+      "ext": {"data_url": "https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/jrsf.json"}
+    }
+  ]
+}
