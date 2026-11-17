@@ -85,6 +85,7 @@ python crawl.py --refresh --limit 50
 
 ```bash
 python make_m3u.py                            # 全量：jrsf.m3u + jrsf.txt + 18 个分年文件 + jrsf_list.json
+python make_m3u.py --api-files                # 额外生成 jrsf_api_2026.json … 每年一个接口文件
 python make_m3u.py --recent 3                 # 只导最近 3 年
 python make_m3u.py --no-year-files --no-txt   # 只要全量 m3u
 python make_m3u.py --bom                      # 给老播放器加 UTF-8 BOM
@@ -139,11 +140,21 @@ python make_m3u.py --bom                      # 给老播放器加 UTF-8 BOM
 
 没有新节目时是 `无新节目，jrsf.json 未改动`，m3u 内容也不会变，提交步骤自动跳过。
 
-## 影视仓配置（TVBox 内核 · 推荐）
+## 影视仓配置（TVBox 内核 · 点播 + 直播）
 
-TVBox 内核的影视仓**只认 jar 蜘蛛或动态 api 接口**，读不了 js 文件，所以走「直播」通道。三种加法任选：
+TVBox 内核**不要用 `type:3`**：它会把 `api` 指向的文件当 jar 解压，于是报「jar加载失败」。
 
-**① 用仓库里的 `config.json`（最省事）**
+### 方式 A：`type:1` + 静态 `jrsf_list.json`（点播列表，推荐）
+
+`type:1` 是 TVBox 的「JSON 数据源」，由配置顶部的 `spider`（全局 jar）提供解析器，
+`api` 指向一个 JSON 文件即可 —— 可以是本地路径（`/sdcard/Download/jrsf_list.json`），
+也可以是网址。`jrsf_list.json` 就是按这个格式生成的：
+
+```json
+{"class":[{"type_id":"2026","type_name":"2026年"}, … 共 18 年],
+ "list":[{"vod_id":"jrsf2026","vod_name":"今日说法 2026年",
+          "vod_play_url":"01 11-17 副标题$https://…/main.m3u8#02 11-16 …"}]}
+```
 
 影视仓 → 设置 → 配置地址，填：
 
@@ -151,9 +162,30 @@ TVBox 内核的影视仓**只认 jar 蜘蛛或动态 api 接口**，读不了 js
 https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json
 ```
 
-`config.json` 里已经配好「今日说法（全量）」和「今日说法 2026年」两个直播源。
+（仓库里的 `影视仓配置_今日说法.json` 与它内容完全一致，填哪个都行）
 
-**② 直接在直播源管理里粘 m3u / txt 地址**
+`config.json` 关键部分：
+
+```json
+{
+  "spider": "https://gitee.com/yuxiaotian3061/tvbox/raw/master/spider.jar",
+  "sites": [{
+    "key": "jrsf",
+    "name": "今日说法 历年(2009-2026)",
+    "type": 1,
+    "api": "https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf_list.json",
+    "headers": {"User-Agent": "Mozilla/5.0 …", "Referer": "https://tv.cctv.com/"}
+  }]
+}
+```
+
+- **`spider` 必须留**：删掉它，`type:1` 就没有解析器，同样会报「jar加载失败」。
+- 列表里是 2009~2026 共 18 张年份卡片，点进去是该年全部期，点哪一期直接播央视 m3u8。
+- 如果点开哪一年都显示 2026 年（部分内核的 detail 只取返回 `list` 的第一条），
+  跑 `python make_m3u.py --api-files`，然后把 `config.json` 改成 18 个站点，
+  每个站点的 `api` 指向 `jrsf_api_2026.json` … `jrsf_api_2009.json`（每个文件里只有 1 条，绝不会串年）。
+
+### 方式 B：m3u / txt 直播源
 
 | 想要什么 | 填这个地址（`你的用户名` 换成自己的） |
 | --- | --- |
@@ -161,13 +193,15 @@ https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json
 | 加载更快（txt 格式，约 0.75 MB） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.txt` |
 | 只要某一年（20~60 KB，秒开） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf_2026.m3u`（可换 2025、2024…） |
 
-**③ 电脑上验证**：把上面地址丢进 PotPlayer / VLC / MX Player，能出播放列表就说明地址没问题。
+填在「直播源管理」里即可，`config.json` 的 `lives` 里也已经配好前两个。
+加好后直播页会出现「2026年」…「2009年」共 18 个分组，点进去就是当期央视 m3u8。
 
-加好后直播页会出现「2026年」「2025年」……「2009年」共 18 个分组，点进去就是当期央视 m3u8。
+电脑上验证：把地址丢进 PotPlayer / VLC / MX Player，能出播放列表就说明地址没问题。
 
 > jsDelivr 对 `@main` 有约 12 小时缓存，当天新上线的一期可能延迟半天出现。
 > 想立刻看到，把 `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/` 换成
 > `https://raw.githubusercontent.com/你的用户名/jinrishuofa/main/`（前提是你的网络能访问 raw）。
+> 改完文件后也可以访问 `https://purge.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json` 手动刷缓存。
 
 ## 影视仓配置（FongMi 内核 · 点播体验）
 

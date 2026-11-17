@@ -1,5 +1,23 @@
 {
-  "sites": [],
+  "spider": "https://gitee.com/yuxiaotian3061/tvbox/raw/master/spider.jar",
+  "wallpaper": "",
+  "sites": [
+    {
+      "key": "jrsf",
+      "name": "今日说法 历年(2009-2026)",
+      "type": 1,
+      "api": "https://cdn.jsdelivr.net/gh/duanzongran/jinrishuofa@main/jrsf_list.json",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 0,
+      "changeable": 0,
+      "ext": "",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://tv.cctv.com/"
+      }
+    }
+  ],
   "lives": [
     {
       "name": "今日说法",
@@ -16,5 +34,6 @@
   ],
   "parses": [],
   "flags": [],
+  "shunt": [],
   "ads": []
 }

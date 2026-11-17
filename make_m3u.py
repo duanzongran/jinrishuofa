@@ -39,6 +39,8 @@ M3U_FILE = "jrsf.m3u"
 TXT_FILE = "jrsf.txt"
 YEAR_FILE_TPL = "jrsf_{}.m3u"
 LIST_FILE = "jrsf_list.json"
+API_FILE_TPL = "jrsf_api_{}.json"       # 每年一个独立接口文件（--api-files 时生成）
+CONFIG_FILE = "config.json"
 
 HLS_TPL = (
     "https://newcntv.qcloudcdn.com/asp/hls/main/0303000a/3/default/"
@@ -217,6 +219,23 @@ def write_text(path, text, bom=False):
     os.replace(tmp, path)
 
 
+def build_api_files(rows):
+    """每年一个独立接口文件：list 只有 1 条，保证点进去一定是该年那 300 期。
+
+    TVBox 的 api 蜘蛛在 detail 时只取返回 list 的第一条，所以不能把 18 年
+    塞进同一个文件里，否则点哪年都播 2026 年。
+    """
+    by_year = {}
+    for r in rows:
+        by_year.setdefault(r["year"], []).append(r)
+    made = []
+    for year in sorted(by_year, reverse=True):
+        path = API_FILE_TPL.format(year)
+        write_text(path, dump_list(build_list(by_year[year])))
+        made.append((path, len(by_year[year])))
+    return made
+
+
 # --------------------------------------------------------------------------
 # 入口
 # --------------------------------------------------------------------------
@@ -231,6 +250,8 @@ def build_args():
     parser.add_argument("--no-year-files", action="store_true", help="不生成 jrsf_YYYY.m3u")
     parser.add_argument("--no-txt", action="store_true", help="不生成 jrsf.txt")
     parser.add_argument("--no-list", action="store_true", help="不生成 jrsf_list.json")
+    parser.add_argument("--api-files", action="store_true",
+                        help="额外生成 jrsf_api_YYYY.json（每年一个接口，type:1 多站点用）")
     parser.add_argument("--bom", action="store_true", help="输出 UTF-8 BOM（老播放器兼容）")
     return parser.parse_args()
 
@@ -271,6 +292,11 @@ def main():
         write_text(LIST_FILE, dump_list(data), args.bom)
         log("已写出 {}：{} 年 / {} 条，{:,} 字节".format(
             LIST_FILE, len(data["class"]), len(data["list"]), os.path.getsize(LIST_FILE)))
+
+    # 4.5) 分年接口文件（可选）
+    if args.api_files:
+        for path, n in build_api_files(rows):
+            log("  {}：{} 期".format(path, n))
 
     # 5) 对账
     dist = "  ".join(
