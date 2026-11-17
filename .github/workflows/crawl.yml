@@ -76,10 +76,15 @@ jobs:
           if [ -n "${LIMIT}" ]; then ARGS="$ARGS --limit ${LIMIT}"; fi
           if [ "${DRY}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          echo "dry=${DRY}" >> "$GITHUB_OUTPUT"
           echo "本次参数：${ARGS:-<增量>}"
 
       - name: 执行采集
         run: python crawl.py ${{ steps.args.outputs.args }}
+
+      - name: 生成播放列表
+        if: steps.args.outputs.dry != 'true'
+        run: python make_m3u.py
 
       - name: 提交并推送
         run: |
@@ -89,11 +94,16 @@ jobs:
             echo "jrsf.json 不存在，跳过提交"
             exit 0
           fi
-          if git diff --quiet -- jrsf.json; then
-            echo "jrsf.json 无变化，跳过提交"
+          for f in jrsf.json jrsf.m3u jrsf.txt jrsf_list.json; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
+          for f in jrsf_[0-9]*.m3u; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
+          if git diff --cached --quiet; then
+            echo "无变化，跳过提交"
             exit 0
           fi
-          git add jrsf.json
           git commit -m "chore: 更新今日说法节目单 $(date -u +%Y-%m-%d)"
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
           git push
