@@ -1,35 +1,18 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CCTV《今日说法》节目单增量爬虫（纯标准库，无需 pip install）
-=============================================================
+《今日说法》影视仓清单 · 每日增量更新脚本
 
-数据源
-    列表：https://api.cntv.cn/NewVideo/getVideoListByColumn?id=TOPC1451464665008914
-          n=100 一页即可覆盖整月；接口的 d=YYYYMM 偶有跨月，故按 time 严格过滤。
-    播放：https://newcntv.qcloudcdn.com/asp/hls/main/0303000a/3/default/<guid>/main.m3u8?maxbr=2048
-          实测与 vdn 接口返回的 hls_url 完全一致，故默认直连拼接；
-          需要逐条校正时加 --resolve 或单独跑 --refresh。
+做什么：
+  1. 读 jrsf_list.json（单卡片多线路：顶部按年份切线路）
+  2. 从央视接口取最近若干期节目
+  3. 逐期解析出 m3u8 直链
+  4. 按 (播出日期, 清洗后标题) 去重，只把新节目追加进去
+  5. 出现新一年（如 2027）时，自动新增一条年份线路
+  6. 更新卡片上的期数 / 年份范围，写回 jrsf_list.json
 
-用法
-    python crawl.py                                  # 增量：抓最近 3 页，遇到已有日期即停
-    python crawl.py --backfill                       # 全量建档：2009-08 至今（按月抓，约 2~3 分钟）
-    python crawl.py --year 2026                      # 抓整年
-    python crawl.py --year 2026 --month 11           # 抓单月
-    python crawl.py --refresh                        # 校验已有地址，失效的重新解析
-    python crawl.py --backfill --dry-run --limit 5   # 试跑：只打印，不写盘
-
-输出 jrsf.json
-    [{"name": "今日说法 2026-11-17 车顶跌落理赔之争",
-      "date": "2026-11-17", "year": "2026",
-      "vod": "https://...main.m3u8?maxbr=2048",
-      "guid": "d0821f39332543119335d7825f6e5882",
-      "pic": "https://p3.img.cctvpic.com/...jpg",
-      "dur": "00:27:59", "desc": "本期节目主要内容：……"}]
-    历史条目（只有 name/year/vod）原样保留，不删不改。
+只依赖 Python 标准库，GitHub Actions 里不用装任何包。
 """
 
-import argparse
 import json
 import os
 import re
@@ -37,387 +20,200 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import date as _date
 
-try:  # Windows 控制台默认 GBK，避免打印中文报错
-    sys.stdout.reconfigure(encoding="utf-8")
-except Exception:
-    pass
+# ---------------- 配置 ----------------
+DATA_FILE = os.environ.get("DATA_FILE", "jrsf_list.json")   # 清单文件
+COLUMN_ID = "TOPC1451464665008914"                          # 今日说法栏目ID
+PAGES = int(os.environ.get("PAGES") or 2)                   # 抓前几页（每页100条）
+PAGE_SIZE = 100
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+TIMEOUT = 25
 
-JSON_FILE = "jrsf.json"
-
-COLUMN_ID = "TOPC1451464665008914"
-LIST_API = "https://api.cntv.cn/NewVideo/getVideoListByColumn"
-VDN_API = "https://vdn.apps.cntv.cn/api/getHttpVideoInfo.do?pid="
-HLS_TPL = (
-    "https://newcntv.qcloudcdn.com/asp/hls/main/0303000a/3/default/"
-    "{guid}/main.m3u8?maxbr=2048"
-)
-
-START_YEAR, START_MONTH = 2009, 8   # 实测最早有数据的月份（2009-07 及以前为空）
-PAGE_SIZE = 100                     # 接口单页上限实测 100 可用
-RECENT_PAGES = 3                    # 增量模式翻页数（约 300 期，足够覆盖数月）
-DESC_LIMIT = 100                    # 简介截断长度（控制 jrsf.json 体积）
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-    ),
-    "Referer": "https://tv.cctv.com/",
-    "Accept": "*/*",
-}
-
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-NUM_DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
-PREFIX_RE = re.compile(r"^《?今日说法》?\s*(?:\d{8})?\s*(.*)$")
+LIST_API = ("https://api.cntv.cn/NewVideo/getVideoListByColumn"
+            "?id={cid}&n={n}&sort=desc&p={p}&mode=0&serviceId=tvcctv")
+VDN_API = "https://vdn.apps.cntv.cn/api/getHttpVideoInfo.do?pid={guid}"
 
 
-def log(*args):
-    print(*args, flush=True)
-
-
-# --------------------------------------------------------------------------
-# 网络
-# --------------------------------------------------------------------------
-def http_get(url, timeout=25, retries=3):
-    """带重试的 GET，失败返回 None。"""
+# ---------------- 网络 ----------------
+def http_json(url, retry=2):
     last = None
-    for i in range(retries):
+    for i in range(retry + 1):
         try:
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read().decode("utf-8", "ignore")
-        except Exception as exc:      # noqa: BLE001 - 网络异常统一重试
-            last = exc
-            if i < retries - 1:
-                time.sleep(1.5 * (i + 1))
-    log("    ! 请求失败: {} ({})".format(url, last))
+            req = urllib.request.Request(url, headers={
+                "User-Agent": UA,
+                "Referer": "https://tv.cctv.com/",
+                "Accept": "*/*",
+            })
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return json.loads(r.read().decode("utf-8", "ignore"))
+        except Exception as e:
+            last = e
+            if i < retry:
+                time.sleep(2)
+    print(f"  [warn] 请求失败 {url[:80]} -> {last}", file=sys.stderr)
     return None
 
 
-def http_json(url, **kwargs):
-    text = http_get(url, **kwargs)
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except Exception:                 # noqa: BLE001
-        return None
+# ---------------- 文本清洗 ----------------
+def clean_title(title):
+    """剥掉《今日说法》、开头8位日期、'今日说法 2009年 第360期' 之类前缀"""
+    t = (title or "").strip()
+    t = t.replace("《今日说法》", "").replace("[今日说法]", "")
+    t = re.sub(r"^\s*\d{8}\s*", "", t)                            # 开头 8 位日期
+    t = re.sub(r"^\s*今日说法\s*\d{4}\s*年\s*第\s*\d+\s*期\s*", "", t)
+    t = re.sub(r"^\s*今日说法\s*", "", t)                          # 裸前缀
+    t = t.replace("\u3000", " ").strip()
+    # 集名里不能出现分隔符，替换成全角
+    t = t.replace("#", "＃").replace("$", "＄")
+    return t or "未命名"
 
 
-# --------------------------------------------------------------------------
-# 抓取
-# --------------------------------------------------------------------------
-def list_month(year, month):
-    """取某月节目原始条目；请求失败返回 None，空月返回 []。"""
-    url = "{}?id={}&n={}&p=1&sort=desc&d={:04d}{:02d}&serviceId=tvcctv".format(
-        LIST_API, COLUMN_ID, PAGE_SIZE, year, month
-    )
-    data = http_json(url)
-    if data is None:
-        return None
-    payload = data.get("data") or {}
-    items = payload.get("list") if isinstance(payload, dict) else None
-    tag = "{:04d}-{:02d}".format(year, month)
-    return [x for x in (items or []) if str(x.get("time", ""))[:7] == tag]
+def episode_name(year, date_str, title):
+    """集名格式：2026-11.17 标题"""
+    mmdd = date_str[5:].replace("-", ".")   # 11.17
+    return f"{year}-{mmdd} {title}"
 
 
-def list_recent(pages, known):
-    """从最新一页开始往前翻，遇到已有日期后停止，返回规范化条目列表。"""
-    out, seen = [], set()
-    for page in range(1, pages + 1):
-        url = "{}?id={}&n={}&p={}&sort=desc&d=&serviceId=tvcctv".format(
-            LIST_API, COLUMN_ID, PAGE_SIZE, page
-        )
-        data = http_json(url)
-        if data is None:
-            break
-        payload = data.get("data") or {}
-        items = payload.get("list") if isinstance(payload, dict) else None
-        if not items:
-            break
-        stop = False
-        for raw in items:
-            item = to_item(raw)
-            if not item or item["date"] in seen:
+# ---------------- 清单读写 ----------------
+def load_data():
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def parse_lines(card):
+    """把 vod_play_from / vod_play_url 拆成 {年份: [(集名, 地址)]}"""
+    froms = (card.get("vod_play_from") or "").split("$$$")
+    urls = (card.get("vod_play_url") or "").split("$$$")
+    lines = {}
+    for name, seg in zip(froms, urls):
+        year = re.sub(r"\D", "", name) or name
+        eps = []
+        for item in (seg.split("#") if seg else []):
+            if "$" not in item:
                 continue
-            seen.add(item["date"])
-            out.append(item)
-            if item["date"] in known:
-                stop = True
-        if stop:
+            ep_name, _, ep_url = item.partition("$")
+            if ep_name and ep_url:
+                eps.append([ep_name, ep_url])
+        lines[year] = eps
+    return lines
+
+
+def ep_key(ep_name):
+    """从集名 '2026-11.17 标题' 还原去重键 (日期, 标题)"""
+    m = re.match(r"^(\d{4})-(\d{2})\.(\d{2})\s+(.*)$", ep_name)
+    if not m:
+        return (ep_name, "")
+    y, mm, dd, title = m.groups()
+    return (f"{y}-{mm}-{dd}", title.strip())
+
+
+def dump_lines(card, lines):
+    """按年份升序写回卡片"""
+    years = sorted([y for y in lines if y.isdigit()], key=int)
+    card["vod_play_from"] = "$$$".join(f"{y}年" for y in years)
+    card["vod_play_url"] = "$$$".join(
+        "#".join(f"{n}${u}" for n, u in lines[y]) for y in years
+    )
+    total = sum(len(lines[y]) for y in years)
+    return years, total
+
+
+# ---------------- 抓取 ----------------
+def fetch_recent():
+    """返回 [(year, date_str, title, guid)]，按时间倒序"""
+    out = []
+    for p in range(1, PAGES + 1):
+        url = LIST_API.format(cid=COLUMN_ID, n=PAGE_SIZE, p=p)
+        d = http_json(url)
+        if not d:
+            continue
+        lst = ((d.get("data") or {}).get("list")) or []
+        if not lst:
             break
+        for it in lst:
+            t = (it.get("time") or "").strip()
+            guid = (it.get("guid") or "").strip()
+            if not t or not guid:
+                continue
+            date_str = t[:10]
+            year = date_str[:4]
+            out.append((year, date_str, clean_title(it.get("title")), guid))
+        time.sleep(0.6)
     return out
 
 
-def to_item(raw):
-    """把接口原始条目规范化；日期统一取 time 字段（老期目标题里没有日期）。"""
-    if not isinstance(raw, dict):
-        return None
-    date = str(raw.get("time") or "")[:10]
-    if not DATE_RE.match(date):
-        m = NUM_DATE_RE.search(str(raw.get("title") or ""))
-        if not m:
-            return None
-        date = "{}-{}-{}".format(*m.groups())
-
-    title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()
-    m = PREFIX_RE.match(title)
-    sub = re.sub(r"\s+", " ", m.group(1)).strip() if m else title
-    name = ("今日说法 " + date + (" " + sub if sub else "")).strip()
-
-    guid = str(raw.get("guid") or raw.get("id") or "").strip()
-    desc = re.sub(r"\s+", " ", str(raw.get("brief") or "")).strip()
-    if len(desc) > DESC_LIMIT:
-        desc = desc[:DESC_LIMIT]
-
-    return {
-        "name": name,
-        "date": date,
-        "year": date[:4],
-        "vod": HLS_TPL.format(guid=guid) if guid else "",
-        "guid": guid,
-        "pic": str(raw.get("image") or "").strip(),
-        "dur": str(raw.get("length") or "").strip(),
-        "desc": desc,
-    }
-
-
 def resolve_hls(guid):
-    """通过 vdn 接口取真实 hls 地址，失败退回规律直链。"""
-    if not guid:
+    """guid -> m3u8 直链"""
+    d = http_json(VDN_API.format(guid=guid))
+    if not d:
         return ""
-    data = http_json(VDN_API + urllib.parse.quote(guid), retries=2)
-    if isinstance(data, dict):
-        url = str(data.get("hls_url") or "").strip()
-        if url.startswith("http"):
-            return url
-    return HLS_TPL.format(guid=guid)
+    u = (d.get("hls_url") or "").strip()
+    if not u:
+        return ""
+    return u
 
 
-# --------------------------------------------------------------------------
-# 存储
-# --------------------------------------------------------------------------
-def item_date(item):
-    d = str(item.get("date") or "")
-    if DATE_RE.match(d):
-        return d
-    name = str(item.get("name") or "")
-    m = re.search(r"\d{4}-\d{2}-\d{2}", name)
-    if m:
-        return m.group(0)
-    m = NUM_DATE_RE.search(name)
-    if m:
-        return "{}-{}-{}".format(*m.groups())
-    year = str(item.get("year") or "")
-    return year + "-01-01" if re.match(r"^\d{4}$", year) else ""
-
-
-def dedup_key(item):
-    return item_date(item)
-
-
-def load_items():
-    if not os.path.exists(JSON_FILE):
-        return []
-    with open(JSON_FILE, "r", encoding="utf-8") as fp:
-        data = json.load(fp)
-    if isinstance(data, dict):
-        data = data.get("list") or []
-    if not isinstance(data, list):
-        raise SystemExit("{} 结构异常：顶层应为数组".format(JSON_FILE))
-    return [x for x in data if isinstance(x, dict)]
-
-
-def save_items(items):
-    """每条一行输出：体积小，且 git diff 只会命中新增那一行。"""
-    tmp = JSON_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fp:
-        if not items:
-            fp.write("[]\n")
-        else:
-            fp.write("[\n")
-            fp.write(",\n".join(json.dumps(x, ensure_ascii=False, separators=(",", ":")) for x in items))
-            fp.write("\n]\n")
-    os.replace(tmp, JSON_FILE)
-
-
-def merge(old, new):
-    """按日期去重合并，返回 (全部条目[新→旧], 真正新增列表)。历史条目原样保留。"""
-    seen, result = set(), []
-    for item in old:
-        key = dedup_key(item)
-        if key and key in seen:
-            continue
-        if key:
-            seen.add(key)
-        result.append(item)
-
-    added = []
-    for item in new:
-        key = dedup_key(item)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        result.append(item)
-        added.append(item)
-
-    result.sort(key=item_date, reverse=True)
-    return result, added
-
-
-# --------------------------------------------------------------------------
-# 采集流程
-# --------------------------------------------------------------------------
-def collect_months(months, limit=None, resolve=False):
-    """按 (year, month) 列表抓取；单月失败只告警，不中断整体。"""
-    collected, failed = [], []
-    for idx, (year, month) in enumerate(months, 1):
-        raws = list_month(year, month)
-        if raws is None:
-            failed.append((year, month))
-            log("  [{}/{}] {:04d}-{:02d} 请求失败，跳过".format(idx, len(months), year, month))
-            continue
-        items = [x for x in (to_item(r) for r in raws) if x]
-        if resolve:
-            for item in items:
-                item["vod"] = resolve_hls(item["guid"])
-                time.sleep(0.1)
-        log("  [{}/{}] {:04d}-{:02d} 取得 {} 期".format(idx, len(months), year, month, len(items)))
-        collected.extend(items)
-        if limit and len(collected) >= limit:
-            collected = collected[:limit]
-            break
-    return collected, failed
-
-
-def month_range(start_year, start_month, end_year, end_month):
-    months, y, m = [], start_year, start_month
-    while (y, m) <= (end_year, end_month):
-        months.append((y, m))
-        m += 1
-        if m > 12:
-            y, m = y + 1, 1
-    return months
-
-
-def url_alive(url, timeout=15):
-    """HEAD 探测，2xx/3xx 视为可用。"""
-    try:
-        req = urllib.request.Request(url, headers=HEADERS, method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return 200 <= resp.status < 400
-    except Exception:                 # noqa: BLE001
-        return False
-
-
-def refresh_links(items, limit=None, dry_run=False):
-    """校验已有 vod，失效的用 vdn 接口重新解析（正常的地址不做改动）。"""
-    targets = items[:limit] if limit else items
-    checked = changed = 0
-    for item in targets:
-        checked += 1
-        vod = str(item.get("vod") or "")
-        if vod.startswith("http") and url_alive(vod):
-            continue
-        guid = str(item.get("guid") or "").strip()
-        if not guid:
-            log("  ! {} 无 guid 且地址失效，只能人工处理".format(item_date(item)))
-            continue
-        url = resolve_hls(guid)
-        if url and url != vod:
-            item["vod"] = url
-            changed += 1
-            log("  [{}] {} 已修复".format(checked, item_date(item)))
-    log("检查 {} 期，修复 {} 期{}".format(checked, changed, "（试跑未写盘）" if dry_run else ""))
-    return changed
-
-
-def build_args():
-    parser = argparse.ArgumentParser(
-        description="CCTV《今日说法》节目单增量爬虫",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--backfill", action="store_true", help="全量建档：从 2009-08 抓到当前月")
-    parser.add_argument("--year", type=int, help="抓指定年份")
-    parser.add_argument("--month", type=int, help="配合 --year 抓单月")
-    parser.add_argument("--refresh", action="store_true", help="校验已有地址，失效的重新解析")
-    parser.add_argument("--resolve", action="store_true", help="抓取时逐条调用 vdn 校正 vod（慢）")
-    parser.add_argument("--pages", type=int, default=RECENT_PAGES, help="增量模式翻页数（默认 3）")
-    parser.add_argument("--limit", type=int, help="最多处理多少期（调试用）")
-    parser.add_argument("--dry-run", action="store_true", help="只打印，不写 jrsf.json")
-    return parser.parse_args()
-
-
+# ---------------- 主流程 ----------------
 def main():
-    args = build_args()
-    today = _date.today()
+    data = load_data()
+    card = data["list"][0]
+    lines = parse_lines(card)
 
-    if args.year and (args.year < 1990 or args.year > today.year + 1):
-        raise SystemExit("--year 取值异常：{}".format(args.year))
-    if args.month and (args.month < 1 or args.month > 12):
-        raise SystemExit("--month 取值异常：{}".format(args.month))
+    # 已有去重键
+    existing = set()
+    for year, eps in lines.items():
+        for n, _ in eps:
+            existing.add(ep_key(n))
 
-    try:
-        old_items = load_items()
-    except SystemExit:
-        raise
-    except Exception as exc:          # noqa: BLE001
-        raise SystemExit("读取 {} 失败：{}".format(JSON_FILE, exc))
+    recent = fetch_recent()
+    print(f"接口返回 {len(recent)} 条")
 
-    known = {k for k in (dedup_key(x) for x in old_items) if k}
-    log("本地已有 {} 期（最新 {}）".format(
-        len(old_items), item_date(old_items[0]) if old_items else "无"))
+    added = 0
+    for year, date_str, title, guid in recent:
+        key = (date_str, title)
+        if key in existing:
+            continue
+        hls = resolve_hls(guid)
+        if not hls:
+            print(f"  [skip] 取不到播放地址：{date_str} {title}")
+            continue
+        name = episode_name(year, date_str, title)
+        if year not in lines:                      # ← 新的一年自动加线路
+            lines[year] = []
+            print(f"  [新线路] 新增 {year}年")
+        lines[year].append([name, hls])
+        existing.add(key)
+        added += 1
+        print(f"  [新增] {name}")
+        time.sleep(0.4)
 
-    # 1) 校正已有链接
-    if args.refresh:
-        changed = refresh_links(old_items, args.limit, args.dry_run)
-        if changed and not args.dry_run:
-            save_items(old_items)
-            log("已写回 {}".format(JSON_FILE))
-        elif not changed:
-            log("无需修改，{} 保持不变".format(JSON_FILE))
-        return 0
+    # 年份内按日期升序（旧→新）
+    for y in lines:
+        lines[y].sort(key=lambda e: ep_key(e[0]))
 
-    # 2) 抓取
-    backfill_months = month_range(START_YEAR, START_MONTH, today.year, today.month)
-    if args.year:
-        months = [(args.year, args.month)] if args.month else month_range(args.year, 1, args.year, 12)
-        log("指定年份抓取：{} 个月".format(len(months)))
-        new_items, failed = collect_months(months, args.limit, args.resolve)
-    elif args.backfill or not old_items:
-        if not args.backfill:
-            log("本地无数据，自动切换为全量建档……")
-        log("全量建档：{:04d}-{:02d} → {:04d}-{:02d}，共 {} 个月".format(
-            START_YEAR, START_MONTH, today.year, today.month, len(backfill_months)))
-        new_items, failed = collect_months(backfill_months, args.limit, args.resolve)
-    else:
-        log("增量模式：抓最近 {} 页".format(args.pages))
-        new_items, failed = list_recent(args.pages, known), []
+    years, total = dump_lines(card, lines)
 
-    if not new_items:
-        log("没有取到任何节目{}".format("（部分月份失败，见上）" if failed else ""))
-        return 2 if failed else 0
-
-    merged, added = merge(old_items, new_items)
-    log("抓取 {} 期，新增 {} 期，合计 {} 期".format(len(new_items), len(added), len(merged)))
-
-    if args.dry_run:
-        preview = added[: args.limit or 5] or new_items[: args.limit or 5] or merged[:5]
-        log("试跑模式，不写盘。示例：")
-        log(json.dumps(preview, ensure_ascii=False, indent=2))
-        return 0
+    # 卡片元信息同步
+    if years:
+        first, last = years[0], years[-1]
+        span = first if first == last else f"{first}-{last}"
+        card["vod_name"] = f"今日说法 历年({span})"
+        card["vod_year"] = span
+        card["vod_remarks"] = f"{total}期"
+        card["vod_content"] = (
+            f"《今日说法》历年节目合集，共{total}期，"
+            f"顶部线路按年份切换，年份内按播出日期排序。央视网官方源。"
+        )
 
     if not added:
-        log("无新节目，{} 未改动".format(JSON_FILE))
+        print("✅ 没有新节目，文件不改动")
         return 0
 
-    save_items(merged)
-    log("已写入 {}：{} → {}".format(JSON_FILE, item_date(merged[-1]), item_date(merged[0])))
-    if failed:
-        log("注意：{} 个月份抓取失败：{}".format(
-            len(failed), ", ".join("{:04d}-{:02d}".format(y, m) for y, m in failed[:12])))
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+
+    print(f"✅ 本次新增 {added} 期，现共 {total} 期，年份：{years[0]}–{years[-1]}（{len(years)}条线路）")
     return 0
 
 
