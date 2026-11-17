@@ -1,17 +1,32 @@
-# 今日说法 · m3u8 节目单（影视仓数据源）
+# 今日说法 · m3u8 节目单（影视仓 / TVBox 数据源）
 
-CCTV《今日说法》2009 年 8 月至今每一期的 **m3u8 播放地址**，由 GitHub Actions 每天自动增量更新，
-影视仓（FongMi TV 内核）通过一个 QuickJS 蜘蛛读取本仓库的 `jrsf.json`，按年份分卡片展示。
+CCTV《今日说法》2009 年 8 月至今每一期的 **m3u8 播放地址**，由 GitHub Actions 每天自动增量更新。
+同一份数据提供两种接入方式，按客户端内核选：
+
+| 客户端内核 | 接哪个文件 | 体验 |
+| --- | --- | --- |
+| **TVBox / 影视仓（绝大多数版本）** | `jrsf.m3u`、`jrsf.txt`（走「直播」通道） | 按年份分组，点开即播；无封面/无搜索 |
+| **FongMi 内核**（FongMi TV 等） | `jrsf.js`（走「点播」通道） | 分类、卡片、月份筛选、搜索、详情 |
+
+> 市面上叫「影视仓」的 App 内核各不相同：`type:3` 报「**jar加载失败**」的一律是 TVBox 内核，
+> 它把 js 蜘蛛当 jar 解压，永远跑不起来 —— 请用下面的 m3u 方式。
 
 ## 目录结构
 
 ```
 .
 ├── crawl.py                     # 爬虫：抓央视栏目接口，增量写入 jrsf.json（纯标准库，无需 pip）
-├── jrsf.json                    # 数据：所有期数的播放地址（由 Actions 自动更新）
-├── jrsf.js                      # 影视仓蜘蛛：读 jrsf.json → 年份分类 → 卡片 → m3u8
+├── make_m3u.py                  # 转换：jrsf.json → m3u / txt / 精简版 list（纯标准库）
+├── jrsf.json                    # 主数据：每期一条（约 3.2 MB，由 Actions 更新）
+├── jrsf.m3u                     # 全量 m3u，group-title 按年份分组（约 0.9 MB）
+├── jrsf.txt                     # 同上的 TVBox txt 格式（约 0.75 MB，加载更快）
+├── jrsf_2026.m3u … 2009.m3u     # 分年 m3u，每年一个（20~60 KB，低配盒子只加当年）
+├── jrsf_list.json               # 精简点播接口样例：一年一条，期数放 vod_play_url（约 0.75 MB）
+├── jrsf.js                      # FongMi 内核用的点播蜘蛛（TVBox 内核不支持）
+├── config.json                  # 影视仓配置：直播源版（TVBox 内核用这个）
+├── config-js.json               # 影视仓配置：点播版（FongMi 内核用）
 ├── README.md
-└── .github/workflows/crawl.yml  # 每天定时跑 crawl.py 并提交 jrsf.json
+└── .github/workflows/crawl.yml  # 每天定时跑 crawl.py + make_m3u.py 并提交
 ```
 
 ## 数据格式
@@ -66,6 +81,21 @@ python crawl.py --year 2026 --month 11 --dry-run --limit 3
 python crawl.py --refresh --limit 50
 ```
 
+### 生成播放列表（m3u / txt / 精简 list）
+
+```bash
+python make_m3u.py                            # 全量：jrsf.m3u + jrsf.txt + 18 个分年文件 + jrsf_list.json
+python make_m3u.py --recent 3                 # 只导最近 3 年
+python make_m3u.py --no-year-files --no-txt   # 只要全量 m3u
+python make_m3u.py --bom                      # 给老播放器加 UTF-8 BOM
+```
+
+生成规则：
+
+- 只写「分组 / 显示名 / 播放地址」三样；简介、封面、时长一概不写（`jrsf_list.json` 也去掉了 `vod_pic` / `vod_content` / `vod_actor`）。
+- 显示名 = `日期 副标题`，去掉重复的「今日说法」前缀。
+- m3u 用 `group-title="2026年"` 分组，txt 用 `2026年,#genre#` 分组，组内新 → 旧。
+
 行为说明：
 
 - **只追加**：按 `date` 去重，已存在的期数绝不覆盖，没有新节目就**不写文件**（Actions 也就不会产生空提交）。
@@ -75,7 +105,7 @@ python crawl.py --refresh --limit 50
 
 ## GitHub Actions
 
-`.github/workflows/crawl.yml` 每天两次自动运行并提交 `jrsf.json`：
+`.github/workflows/crawl.yml` 每天两次自动运行：抓取 → 生成 m3u / txt / list → 一起提交：
 
 | 触发 | 时间 | 说明 |
 | --- | --- | --- |
@@ -94,41 +124,74 @@ python crawl.py --refresh --limit 50
 ### 日志里会看到
 
 ```
-本地已有 6243 期（最新 2026-11-16）
+本地已有 5022 期（最新 2026-11-16）
 增量模式：抓最近 3 页
-抓取 300 期，新增 1 期，合计 6244 期
+抓取 100 期，新增 1 期，合计 5023 期
 已写入 jrsf.json：2009-08-01 → 2026-11-17
+已写出 jrsf.m3u：5023 期，920,065 字节
+已写出 jrsf.txt：754,586 字节
+  jrsf_2026.m3u：198 期
+  jrsf_2025.m3u：243 期
+  ……
+已写出 jrsf_list.json：18 年 / 18 条，751,633 字节
+年份分布：2026=198  2025=243  … 2009=97
 ```
 
-没有新节目时是 `无新节目，jrsf.json 未改动`，随后提交步骤自动跳过。
+没有新节目时是 `无新节目，jrsf.json 未改动`，m3u 内容也不会变，提交步骤自动跳过。
 
-## 影视仓配置
+## 影视仓配置（TVBox 内核 · 推荐）
 
-1. 把 `jrsf.js` 里的 `OWNER` 改成你的 GitHub 用户名（`REPO` 默认 `jinrishuofa`，如仓库名不同也改）。
-2. 在影视仓使用的 `config.json` 的 `sites` 里加一项：
+TVBox 内核的影视仓**只认 jar 蜘蛛或动态 api 接口**，读不了 js 文件，所以走「直播」通道。三种加法任选：
+
+**① 用仓库里的 `config.json`（最省事）**
+
+影视仓 → 设置 → 配置地址，填：
+
+```
+https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json
+```
+
+`config.json` 里已经配好「今日说法（全量）」和「今日说法 2026年」两个直播源。
+
+**② 直接在直播源管理里粘 m3u / txt 地址**
+
+| 想要什么 | 填这个地址（`你的用户名` 换成自己的） |
+| --- | --- |
+| 全部 18 年 5023 期（约 0.9 MB） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.m3u` |
+| 加载更快（txt 格式，约 0.75 MB） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.txt` |
+| 只要某一年（20~60 KB，秒开） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf_2026.m3u`（可换 2025、2024…） |
+
+**③ 电脑上验证**：把上面地址丢进 PotPlayer / VLC / MX Player，能出播放列表就说明地址没问题。
+
+加好后直播页会出现「2026年」「2025年」……「2009年」共 18 个分组，点进去就是当期央视 m3u8。
+
+> jsDelivr 对 `@main` 有约 12 小时缓存，当天新上线的一期可能延迟半天出现。
+> 想立刻看到，把 `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/` 换成
+> `https://raw.githubusercontent.com/你的用户名/jinrishuofa/main/`（前提是你的网络能访问 raw）。
+
+## 影视仓配置（FongMi 内核 · 点播体验）
+
+FongMi 内核（FongMi TV 3.x、部分影视仓版本）支持 QuickJS 蜘蛛，用 `config-js.json`，或把下面这段加进 `sites`：
 
 ```json
 {
   "key": "jrsf",
   "name": "今日说法",
   "type": 3,
-  "api": "https://raw.githubusercontent.com/你的用户名/jinrishuofa/main/jrsf.js",
+  "api": "https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.js",
   "searchable": 1,
   "quickSearch": 1,
   "filterable": 1,
   "style": {"type": "rect", "ratio": 0.75},
-  "ext": {
-    "data_url": "https://raw.githubusercontent.com/你的用户名/jinrishuofa/main/jrsf.json"
-  }
+  "ext": {"data_url": "https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.json"}
 }
 ```
 
-- `api` 指向 `.js` 文件即可，影视仓的 QuickJS 内核会直接加载，**不需要打包 jar**。
-- `ext.data_url` 可覆盖数据地址；国内加载慢时换成 jsDelivr：
-  `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.json`
-  （脚本默认已带 raw → jsDelivr 自动回退，且实例内缓存 10 分钟）。
+部署前把 `jrsf.js` 顶部的 `OWNER` 改成你的 GitHub 用户名（`REPO` 保持 `jinrishuofa`）。
 
-### 界面效果
+### 界面效果（FongMi 内核）
+
+（TVBox 内核只有直播列表，没有下面这些）
 
 - 首页：分类为「最新上线」+ `2026年`、`2025年` …… `2009年`（按数据自动生成）
 - 分类页：每页 30 张卡片，右上角显示日期与时长；可按「月份」筛选
@@ -140,9 +203,14 @@ python crawl.py --refresh --limit 50
 
 | 现象 | 排查 |
 | --- | --- |
-| 影视仓里点开一片空白 | 先用浏览器打开 `api` 那个 `.js` 地址，确认能下载；再打开 `data_url` 确认是 JSON 数组 |
+| `type:3` 报「**jar加载失败**」 | 客户端是 TVBox 内核，只会把 api 当 jar 解压，不支持 js 蜘蛛 → 改用 m3u 直播源（见「影视仓配置（TVBox 内核）」） |
+| 电视端提示「拉取失败」/ 配置地址加载不出来 | 电视访问不了 `raw.githubusercontent.com`，把配置地址换成 jsDelivr 那份：`https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json` |
+| 直播列表能出来，但没有封面/简介 | m3u 是频道列表形态，本来就不带封面；要卡片和搜索得换 FongMi 内核 + `jrsf.js` |
+| m3u 里没有当天最新一期 | jsDelivr 对 `@main` 有约 12 小时缓存；等半天，或改用 `raw.githubusercontent.com` 地址 |
+| 直播页加载很慢 / 卡住 | 全量 m3u 有 5023 期，低配盒子改用分年文件：`jrsf_2026.m3u`、`jrsf_2025.m3u` |
+| FongMi 内核里点开一片空白 | 浏览器打开 `api` 那个 `.js` 地址确认能下载；再打开 `data_url` 确认是 JSON 数组 |
 | 有卡片但一播放就失败 | 用 `python crawl.py --refresh --limit 20` 校正地址；或直接浏览器试 `vod` 链接 |
 | 某天的节目没更新 | 央视有时晚于 13:00 上线，22:00 那次会补；也可手动 `Run workflow` |
 | Actions 报 403 / 无法 push | 就是上面「开写权限」那步没做 |
 | 抓取整体失败 | 央视接口改版了，看 `crawl.py` 顶部注释里的两个接口地址，按新参数改 `list_month()` |
-| 想从零重建数据 | 删除 `jrsf.json` 后手动跑 `backfill` |
+| 想从零重建数据 | 删除 `jrsf.json` 后手动跑 `backfill`，再跑 `python make_m3u.py` |
