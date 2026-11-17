@@ -5,11 +5,12 @@ CCTV《今日说法》2009 年 8 月至今每一期的 **m3u8 播放地址**，�
 
 | 客户端内核 | 接哪个文件 | 体验 |
 | --- | --- | --- |
-| **TVBox / 影视仓（绝大多数版本）** | `jrsf.m3u`、`jrsf.txt`（走「直播」通道） | 按年份分组，点开即播；无封面/无搜索 |
-| **FongMi 内核**（FongMi TV 等） | `jrsf.js`（走「点播」通道） | 分类、卡片、月份筛选、搜索、详情 |
+| **TVBox / 影视仓（绝大多数版本）** | `jrsf_list.json`（`type:1` 点播）+ `config.json` | 1 张卡片「今日说法」，进详情页按线路切年份；无封面/无搜索 |
+| **TVBox / 影视仓 · 只要直播列表** | `jrsf.m3u`、`jrsf.txt`、`jrsf_2026.m3u` | 按年份分组，点开即播，最省事 |
+| **FongMi 内核**（FongMi TV 等） | `jrsf.js`（`type:3` 点播）+ `config-js.json` | 分类、卡片、月份筛选、搜索、详情 |
 
 > 市面上叫「影视仓」的 App 内核各不相同：`type:3` 报「**jar加载失败**」的一律是 TVBox 内核，
-> 它把 js 蜘蛛当 jar 解压，永远跑不起来 —— 请用下面的 m3u 方式。
+> 它把 js 蜘蛛当 jar 解压，永远跑不起来 —— 改用 `type:1` + `jrsf_list.json`（见「影视仓配置」）。
 
 ## 目录结构
 
@@ -21,10 +22,10 @@ CCTV《今日说法》2009 年 8 月至今每一期的 **m3u8 播放地址**，�
 ├── jrsf.m3u                     # 全量 m3u，group-title 按年份分组（约 0.9 MB）
 ├── jrsf.txt                     # 同上的 TVBox txt 格式（约 0.75 MB，加载更快）
 ├── jrsf_2026.m3u … 2009.m3u     # 分年 m3u，每年一个（20~60 KB，低配盒子只加当年）
-├── jrsf_list.json               # 精简点播接口样例：一年一条，期数放 vod_play_url（约 0.75 MB）
+├── jrsf_list.json               # 点播数据：1 个分类 + 1 个卡片 + 18 条年份线路（约 0.73 MB）
 ├── jrsf.js                      # FongMi 内核用的点播蜘蛛（TVBox 内核不支持）
-├── config.json                  # 影视仓配置：直播源版（TVBox 内核用这个）
-├── config-js.json               # 影视仓配置：点播版（FongMi 内核用）
+├── config.json                  # 影视仓配置：type:1 点播（jrsf_list.json）+ m3u 直播
+├── config-js.json               # 影视仓配置：FongMi 内核点播版
 ├── README.md
 └── .github/workflows/crawl.yml  # 每天定时跑 crawl.py + make_m3u.py 并提交
 ```
@@ -85,7 +86,7 @@ python crawl.py --refresh --limit 50
 
 ```bash
 python make_m3u.py                            # 全量：jrsf.m3u + jrsf.txt + 18 个分年文件 + jrsf_list.json
-python make_m3u.py --api-files                # 额外生成 jrsf_api_2026.json … 每年一个接口文件
+python make_m3u.py --ep-order desc            # 线路（年份）内改成最新一期在前
 python make_m3u.py --recent 3                 # 只导最近 3 年
 python make_m3u.py --no-year-files --no-txt   # 只要全量 m3u
 python make_m3u.py --bom                      # 给老播放器加 UTF-8 BOM
@@ -96,6 +97,25 @@ python make_m3u.py --bom                      # 给老播放器加 UTF-8 BOM
 - 只写「分组 / 显示名 / 播放地址」三样；简介、封面、时长一概不写（`jrsf_list.json` 也去掉了 `vod_pic` / `vod_content` / `vod_actor`）。
 - 显示名 = `日期 副标题`，去掉重复的「今日说法」前缀。
 - m3u 用 `group-title="2026年"` 分组，txt 用 `2026年,#genre#` 分组，组内新 → 旧。
+- `jrsf_list.json` 的结构是「**1 个分类 + 1 个卡片 + 每年一条线路**」：
+
+```json
+{
+  "class": [{"type_id": "jrsf", "type_name": "今日说法"}],
+  "list": [{
+    "vod_id": "jrsf",
+    "vod_name": "今日说法",
+    "vod_remarks": "5023期",
+    "vod_year": "2009-2026",
+    "vod_play_from": "2026年$$$2025年$$$…$$$2009年",
+    "vod_play_url": "01 01-04 副标题$url#02 …#198 11-17 …$$$09月…$$$…"
+  }]
+}
+```
+
+  - `$$$` 分隔线路，线路名就是年份，新版内核在详情页顶部显示为「线路1 / 线路2 …」；
+  - `#` 分隔集数，编号按日期**正序**（`01` = 当年最早一期）；想要最新在前加 `--ep-order desc`；
+  - 新增年份时脚本自动多一条线路，配置和影视仓都不用动。
 
 行为说明：
 
@@ -151,10 +171,13 @@ TVBox 内核**不要用 `type:3`**：它会把 `api` 指向的文件当 jar 解�
 也可以是网址。`jrsf_list.json` 就是按这个格式生成的：
 
 ```json
-{"class":[{"type_id":"2026","type_name":"2026年"}, … 共 18 年],
- "list":[{"vod_id":"jrsf2026","vod_name":"今日说法 2026年",
-          "vod_play_url":"01 11-17 副标题$https://…/main.m3u8#02 11-16 …"}]}
+{"class":[{"type_id":"jrsf","type_name":"今日说法"}],
+ "list":[{"vod_id":"jrsf","vod_name":"今日说法","vod_remarks":"5023期",
+          "vod_play_from":"2026年$$$2025年$$$…$$$2009年",
+          "vod_play_url":"01 01-04 副标题$https://…/main.m3u8#02 …$$$…"}]}
 ```
+
+即：**1 个分类、1 个卡片，年份全部做成「线路」**，详情页顶部切换线路就是切年份。
 
 影视仓 → 设置 → 配置地址，填：
 
@@ -180,10 +203,10 @@ https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json
 ```
 
 - **`spider` 必须留**：删掉它，`type:1` 就没有解析器，同样会报「jar加载失败」。
-- 列表里是 2009~2026 共 18 张年份卡片，点进去是该年全部期，点哪一期直接播央视 m3u8。
-- 如果点开哪一年都显示 2026 年（部分内核的 detail 只取返回 `list` 的第一条），
-  跑 `python make_m3u.py --api-files`，然后把 `config.json` 改成 18 个站点，
-  每个站点的 `api` 指向 `jrsf_api_2026.json` … `jrsf_api_2009.json`（每个文件里只有 1 条，绝不会串年）。
+- 列表只有 1 张卡片「今日说法」，点进去 **顶部是 18 条线路（2026年 … 2009年）**，切线路 = 切年份；
+  每条线路里是当年的全部期，编号 `01`、`02` … 按日期正序，点任意一期直接播央视 m3u8。
+- 明年 1 月 1 日起脚本自动多一条「2027年」线路，配置和影视仓都不用改。
+- 想让最新一期排在前面：`python make_m3u.py --ep-order desc` 再重新上传 `jrsf_list.json`。
 
 ### 方式 B：m3u / txt 直播源
 
@@ -237,7 +260,9 @@ FongMi 内核（FongMi TV 3.x、部分影视仓版本）支持 QuickJS 蜘蛛，
 
 | 现象 | 排查 |
 | --- | --- |
-| `type:3` 报「**jar加载失败**」 | 客户端是 TVBox 内核，只会把 api 当 jar 解压，不支持 js 蜘蛛 → 改用 m3u 直播源（见「影视仓配置（TVBox 内核）」） |
+| `type:3` 报「**jar加载失败**」 | 客户端是 TVBox 内核，只会把 api 当 jar 解压，不支持 js 蜘蛛 → 改用 `type:1` + `jrsf_list.json`（见「影视仓配置」方式 A） |
+| 卡片点进去怎么只看某一年的 | 详情页顶部的「线路1 / 线路2 …」就是年份，从左到右 2026年 → 2009年 |
+| 切了线路但集数没变 | 内核缓存了上次的详情页，退出卡片再重进；或清一下 App 缓存 |
 | 电视端提示「拉取失败」/ 配置地址加载不出来 | 电视访问不了 `raw.githubusercontent.com`，把配置地址换成 jsDelivr 那份：`https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json` |
 | 直播列表能出来，但没有封面/简介 | m3u 是频道列表形态，本来就不带封面；要卡片和搜索得换 FongMi 内核 + `jrsf.js` |
 | m3u 里没有当天最新一期 | jsDelivr 对 `@main` 有约 12 小时缓存；等半天，或改用 `raw.githubusercontent.com` 地址 |

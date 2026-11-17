@@ -155,15 +155,21 @@ def build_txt(rows):
     return "\n".join(out)
 
 
-def build_list(rows):
-    """一年一条：class 给分类，list 里 vod_play_url 用 # 拼成选集。"""
+def build_list(rows, ep_order="asc"):
+    """整站一条：class 只有「今日说法」，list 只有一个卡片，
+    每年一条线路（vod_play_from），线路内按期数编号。
+
+    ep_order: asc = 线路内正序（最早在前），desc = 最新在前。
+    线路顺序固定为新年份在前（2026年 → 2009年），新增年份自动多一条线路。
+    """
     by_year = {}
     for r in rows:
         by_year.setdefault(r["year"], []).append(r)
 
-    classes, items = [], []
-    for year in sorted(by_year, reverse=True):
-        group = sorted(by_year[year], key=lambda x: x["date"])
+    years = sorted(by_year, reverse=True)
+    froms, play_urls = [], []
+    for year in years:
+        group = sorted(by_year[year], key=lambda x: x["date"], reverse=(ep_order == "desc"))
         parts = []
         for idx, r in enumerate(group, 1):
             sub = r["title"][len(r["date"]):].strip()
@@ -171,26 +177,26 @@ def build_list(rows):
             if sub:
                 label += " " + sub
             parts.append(label + "$" + r["vod"])
-        classes.append({"type_id": year, "type_name": "{}年".format(year)})
-        items.append(
-            {
-                "vod_id": "jrsf" + year,
-                "type_id": year,
-                "type_name": "{}年".format(year),
-                "vod_name": "今日说法 {}年".format(year),
-                "vod_remarks": "{}期".format(len(group)),
-                "vod_year": year,
-                "vod_play_from": "央视",
-                "vod_play_url": "#".join(parts),
-            }
-        )
+        froms.append("{}年".format(year))
+        play_urls.append("#".join(parts))
+
+    item = {
+        "vod_id": "jrsf",
+        "type_id": "jrsf",
+        "type_name": "今日说法",
+        "vod_name": "今日说法",
+        "vod_remarks": "{}期".format(len(rows)),
+        "vod_year": "{}-{}".format(years[-1], years[0]),
+        "vod_play_from": "$$$".join(froms),
+        "vod_play_url": "$$$".join(play_urls),
+    }
     return {
-        "class": classes,
+        "class": [{"type_id": "jrsf", "type_name": "今日说法"}],
         "page": 1,
         "pagecount": 1,
-        "limit": len(items),
-        "total": len(items),
-        "list": items,
+        "limit": 1,
+        "total": 1,
+        "list": [item],
     }
 
 
@@ -219,19 +225,15 @@ def write_text(path, text, bom=False):
     os.replace(tmp, path)
 
 
-def build_api_files(rows):
-    """每年一个独立接口文件：list 只有 1 条，保证点进去一定是该年那 300 期。
-
-    TVBox 的 api 蜘蛛在 detail 时只取返回 list 的第一条，所以不能把 18 年
-    塞进同一个文件里，否则点哪年都播 2026 年。
-    """
+def build_api_files(rows, ep_order="asc"):
+    """每年一个独立接口文件：class/list 都只有 1 条，一年一条线路。"""
     by_year = {}
     for r in rows:
         by_year.setdefault(r["year"], []).append(r)
     made = []
     for year in sorted(by_year, reverse=True):
         path = API_FILE_TPL.format(year)
-        write_text(path, dump_list(build_list(by_year[year])))
+        write_text(path, dump_list(build_list(by_year[year], ep_order)))
         made.append((path, len(by_year[year])))
     return made
 
@@ -250,8 +252,10 @@ def build_args():
     parser.add_argument("--no-year-files", action="store_true", help="不生成 jrsf_YYYY.m3u")
     parser.add_argument("--no-txt", action="store_true", help="不生成 jrsf.txt")
     parser.add_argument("--no-list", action="store_true", help="不生成 jrsf_list.json")
+    parser.add_argument("--ep-order", choices=("asc", "desc"), default="asc",
+                        help="线路内集数顺序：asc=正序（最早在前，默认）/ desc=最新在前")
     parser.add_argument("--api-files", action="store_true",
-                        help="额外生成 jrsf_api_YYYY.json（每年一个接口，type:1 多站点用）")
+                        help="额外生成 jrsf_api_YYYY.json（一年一个文件，仅特殊内核需要）")
     parser.add_argument("--bom", action="store_true", help="输出 UTF-8 BOM（老播放器兼容）")
     return parser.parse_args()
 
@@ -286,16 +290,17 @@ def main():
             write_text(path, build_m3u(by_year[year]), args.bom)
             log("  {}：{} 期".format(path, len(by_year[year])))
 
-    # 4) 精简版点播 list
+    # 4) 精简版点播 list（单卡片 + 多线路）
     if not args.no_list:
-        data = build_list(rows)
+        data = build_list(rows, args.ep_order)
         write_text(LIST_FILE, dump_list(data), args.bom)
-        log("已写出 {}：{} 年 / {} 条，{:,} 字节".format(
-            LIST_FILE, len(data["class"]), len(data["list"]), os.path.getsize(LIST_FILE)))
+        log("已写出 {}：{} 个分类 / {} 个卡片 / {} 条线路，{:,} 字节".format(
+            LIST_FILE, len(data["class"]), len(data["list"]),
+            len(data["list"][0]["vod_play_from"].split("$$$")), os.path.getsize(LIST_FILE)))
 
     # 4.5) 分年接口文件（可选）
     if args.api_files:
-        for path, n in build_api_files(rows):
+        for path, n in build_api_files(rows, args.ep_order):
             log("  {}：{} 期".format(path, n))
 
     # 5) 对账
