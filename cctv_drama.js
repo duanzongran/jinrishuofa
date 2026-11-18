@@ -295,8 +295,6 @@ export default class CctvDrama extends Spider {
         return {
             class: [
                 { type_id: "all", type_name: "全部" },
-                { type_id: "shenfan1", type_name: "神探狄仁杰 第一部" },
-                { type_id: "shexiang", type_name: "奢香夫人" },
             ],
         };
     }
