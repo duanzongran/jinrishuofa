@@ -5,12 +5,20 @@
 做什么：
   1. 读 jrsf_list.json（单卡片多线路：顶部按年份切线路）
   2. 从央视接口取最近若干期节目
-  3. 逐期解析出 m3u8 直链
+  3. 逐期解析出 m3u8 直链（并统一改写到国内可用的稳定 CDN + 实测校验）
   4. 按 (播出日期, 清洗后标题) 去重，只把新节目追加进去
   5. 出现新一年（如 2027）时，自动新增一条年份线路
-  6. 更新卡片上的期数 / 年份范围，写回 jrsf_list.json
+  6. 顺手修复历史条目里不可达的 CDN 域名
+  7. 更新卡片上的期数 / 年份范围，写回 jrsf_list.json
 
 只依赖 Python 标准库，GitHub Actions 里不用装任何包。
+
+关于 CDN 域名（重要）：
+  vdn 接口返回的 hls_url 是按【请求方 IP】做 CDN 调度的。GitHub Actions 的
+  机房在海外，常被调度到 hls.cntv.cdn20.com 这类节点，而该域名对普通请求整域
+  return 403（连根路径 / 都是 403），放进清单就是国内播放器黑屏。
+  实测同一 GUID 把域名换成 hls.cntv.lxdns.com / newcntv.qcloudcdn.com 即 200 可播，
+  所以这里统一改写到白名单域名，并做一次 #EXTM3U 探活兜底。
 """
 
 import json
@@ -30,9 +38,15 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 TIMEOUT = 25
 
+# 国内稳定可播的 HLS 节点，按优先级排列（换序即可换主力节点）
+PREFERRED_HOSTS = ("hls.cntv.lxdns.com", "newcntv.qcloudcdn.com")
+
 LIST_API = ("https://api.cntv.cn/NewVideo/getVideoListByColumn"
             "?id={cid}&n={n}&sort=desc&p={p}&mode=0&serviceId=tvcctv")
 VDN_API = "https://vdn.apps.cntv.cn/api/getHttpVideoInfo.do?pid={guid}"
+
+# 形如 https://<host>/asp/hls/main/0303000a/3/default/<guid>/main.m3u8?maxbr=2048
+HLS_RE = re.compile(r"^(https?)://([^/]+)(/asp/hls/main/\S*)$")
 
 
 # ---------------- 网络 ----------------
@@ -53,6 +67,55 @@ def http_json(url, retry=2):
                 time.sleep(2)
     print(f"  [warn] 请求失败 {url[:80]} -> {last}", file=sys.stderr)
     return None
+
+
+def probe_hls(url, timeout=10):
+    """探活：GET 一下 master.m3u8，看是不是正经的 #EXTM3U"""
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": UA,
+            "Referer": "https://tv.cctv.com/",
+            "Accept": "*/*",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            head = r.read(64)
+        return head.lstrip().startswith(b"#EXTM3U")
+    except Exception:
+        return False
+
+
+def rewrite_host(url, prefer_zero=True):
+    """只改域名，不做网络请求（用于批量修历史数据）"""
+    m = HLS_RE.match(url or "")
+    if not m:
+        return url
+    scheme, host, path = m.groups()
+    if host in PREFERRED_HOSTS:
+        return url
+    return f"{scheme}://{PREFERRED_HOSTS[0]}{path}" if prefer_zero else url
+
+
+def normalize_hls(url):
+    """把调度返回的 CDN 域名改写到白名单，并实测哪一个真的能播"""
+    m = HLS_RE.match(url or "")
+    if not m:
+        return url                      # 不是标准 hls 形态，原样返回
+    scheme, host, path = m.groups()
+
+    cands = [f"{scheme}://{h}{path}" for h in PREFERRED_HOSTS]
+    if host not in PREFERRED_HOSTS:
+        cands.append(url)               # 原地址留作兜底
+    elif url not in cands:
+        cands.insert(0, url)
+
+    for c in cands:
+        if probe_hls(c):
+            if c != url:
+                print(f"  [cdn] 改写 {host} -> {urllib.parse.urlparse(c).netloc}")
+            return c
+
+    print(f"  [warn] 所有节点探活失败，仍保留首选域名：{cands[0][:90]}", file=sys.stderr)
+    return cands[0]
 
 
 # ---------------- 文本清洗 ----------------
@@ -119,6 +182,20 @@ def dump_lines(card, lines):
     return years, total
 
 
+def heal_lines(lines):
+    """批量修复历史条目里非白名单的 CDN 域名，返回改动条数"""
+    fixed = 0
+    for year, eps in lines.items():
+        for i, (name, url) in enumerate(eps):
+            new = rewrite_host(url)
+            if new != url:
+                print(f"  [heal] {name} {urllib.parse.urlparse(url).netloc} -> "
+                      f"{urllib.parse.urlparse(new).netloc}")
+                eps[i][1] = new
+                fixed += 1
+    return fixed
+
+
 # ---------------- 抓取 ----------------
 def fetch_recent():
     """返回 [(year, date_str, title, guid)]，按时间倒序"""
@@ -144,14 +221,14 @@ def fetch_recent():
 
 
 def resolve_hls(guid):
-    """guid -> m3u8 直链"""
+    """guid -> m3u8 直链（已做 CDN 改写 + 探活）"""
     d = http_json(VDN_API.format(guid=guid))
     if not d:
         return ""
     u = (d.get("hls_url") or "").strip()
     if not u:
         return ""
-    return u
+    return normalize_hls(u)
 
 
 # ---------------- 主流程 ----------------
@@ -159,6 +236,9 @@ def main():
     data = load_data()
     card = data["list"][0]
     lines = parse_lines(card)
+
+    # 先把历史条目里不可达的 CDN 域名修掉
+    healed = heal_lines(lines)
 
     # 已有去重键
     existing = set()
@@ -206,14 +286,15 @@ def main():
             f"顶部线路按年份切换，年份内按播出日期排序。央视网官方源。"
         )
 
-    if not added:
+    if not added and not healed:
         print("✅ 没有新节目，文件不改动")
         return 0
 
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
 
-    print(f"✅ 本次新增 {added} 期，现共 {total} 期，年份：{years[0]}–{years[-1]}（{len(years)}条线路）")
+    print(f"✅ 本次新增 {added} 期、修复 {healed} 条域名，"
+          f"现共 {total} 期，年份：{years[0]}–{years[-1]}（{len(years)}条线路）")
     return 0
 
 
