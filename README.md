@@ -1,275 +1,236 @@
-# 今日说法 · m3u8 节目单（影视仓 / TVBox 数据源）
+# 今日说法 历年节目 · 影视仓源
 
-CCTV《今日说法》2009 年 8 月至今每一期的 **m3u8 播放地址**，由 GitHub Actions 每天自动增量更新。
-同一份数据提供两种接入方式，按客户端内核选：
+把央视《今日说法》2008 年至今的全部节目，做成一个可以在影视仓 / TVBox / FongMi 类 App 里直接点播的源。
 
-| 客户端内核 | 接哪个文件 | 体验 |
-| --- | --- | --- |
-| **TVBox / 影视仓（绝大多数版本）** | `jrsf_list.json`（`type:1` 点播）+ `config.json` | 1 张卡片「今日说法」，进详情页按线路切年份；无封面/无搜索 |
-| **TVBox / 影视仓 · 只要直播列表** | `jrsf.m3u`、`jrsf.txt`、`jrsf_2026.m3u` | 按年份分组，点开即播，最省事 |
-| **FongMi 内核**（FongMi TV 等） | `jrsf.js`（`type:3` 点播）+ `config-js.json` | 分类、卡片、月份筛选、搜索、详情 |
+- 数据量：**5447 期**，覆盖 **2008–2026** 共 19 个年份
+- 形态：**一张合集卡片 + 顶部年份线路**（点进去，顶部切年份，每年一条独立线路，互不串集）
+- 更新：GitHub Actions 每天自动抓最新一期，追加进清单；**跨年时自动新增一条新年份线路**
 
-> 市面上叫「影视仓」的 App 内核各不相同：`type:3` 报「**jar加载失败**」的一律是 TVBox 内核，
-> 它把 js 蜘蛛当 jar 解压，永远跑不起来 —— 改用 `type:1` + `jrsf_list.json`（见「影视仓配置」）。
+---
 
-## 目录结构
+## 一、影视仓怎么用
+
+配置地址（填到影视仓的「配置地址 / 接口」里）：
 
 ```
-.
-├── crawl.py                     # 爬虫：抓央视栏目接口，增量写入 jrsf.json（纯标准库，无需 pip）
-├── make_m3u.py                  # 转换：jrsf.json → m3u / txt / 精简版 list（纯标准库）
-├── jrsf.json                    # 主数据：每期一条（约 3.2 MB，由 Actions 更新）
-├── jrsf.m3u                     # 全量 m3u，group-title 按年份分组（约 0.9 MB）
-├── jrsf.txt                     # 同上的 TVBox txt 格式（约 0.75 MB，加载更快）
-├── jrsf_2026.m3u … 2009.m3u     # 分年 m3u，每年一个（20~60 KB，低配盒子只加当年）
-├── jrsf_list.json               # 点播数据：1 个分类 + 1 个卡片 + 18 条年份线路（约 0.73 MB）
-├── jrsf.js                      # FongMi 内核用的点播蜘蛛（TVBox 内核不支持）
-├── config.json                  # 影视仓配置：type:1 点播（jrsf_list.json）+ m3u 直播
-├── config-js.json               # 影视仓配置：FongMi 内核点播版
-├── README.md
-└── .github/workflows/crawl.yml  # 每天定时跑 crawl.py + make_m3u.py 并提交
+https://ghfast.top/https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/config.json
 ```
 
-## 数据格式
+备用地址（ghfast 抽风时替换用，内容完全一样）：
 
-`jrsf.json` 是数组，按日期倒序（新 → 旧），**每条一行**（体积小、git diff 只会命中新增那一行）：
-
-```json
-[
-  {
-    "name": "今日说法 2026-11-17 车顶跌落理赔之争",
-    "date": "2026-11-17",
-    "year": "2026",
-    "vod": "https://newcntv.qcloudcdn.com/asp/hls/main/0303000a/3/default/d0821f39332543119335d7825f6e5882/main.m3u8?maxbr=2048",
-    "guid": "d0821f39332543119335d7825f6e5882",
-    "pic": "https://p3.img.cctvpic.com/fmspic/2026/11/17/d0821f39332543119335d7825f6e5882-1.jpg",
-    "dur": "00:27:59",
-    "desc": "本期节目主要内容：……"
-  }
-]
+```
+https://gh-proxy.com/https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/config.json
+https://cdn.jsdelivr.net/gh/duanzongran/jinrishuofa@main/config.json
 ```
 
-| 字段 | 说明 |
-| --- | --- |
-| `name` | 统一格式「今日说法 YYYY-MM-DD 副标题」，可检索 |
-| `date` | 节目日期，**去重键**，也是影视仓里的 `vod_id` |
-| `year` | 年份，影视仓按它分卡片 |
-| `vod` | m3u8 直链（央视腾讯云 CDN，无需鉴权） |
-| `guid` | 央视视频 ID，`vod` 可用它重新拼出来 |
-| `pic` / `dur` / `desc` | 封面、时长、简介（可选，缺了不影响播放） |
+导入后的操作：
 
-> 历史旧数据（只有 `name`/`year`/`vod`）不会被改写，蜘蛛会自动从 `name` 里补出日期。
+1. 我的 → 设置 → **清空缓存**（换配置一定要清，否则可能读到旧数据）
+2. 填入上面的配置地址 → 保存
+3. **下拉刷新**，顶部会出现一个「今日说法」站点标签
+4. 点进去 → 看到卡片「今日说法 历年(2008-2026) 5447期」→ 进入后顶部按年份切换
 
-## 本地运行
+> 如果只看到「主页」标签、没有「今日说法」标签，说明站点没加载成功，先检查仓库是不是 **public**，再去「站点管理」里看有没有这个名字。
 
-需要 Python 3.8+，**不用安装任何依赖**。
+---
 
-```bash
-# 增量：抓最近 3 页，遇到已有日期立刻停止（日常就用这个）
-python crawl.py
+## 二、仓库文件说明
 
-# 全量建档：2009-08 至今，约 208 次请求、2~3 分钟
-python crawl.py --backfill
+### 必需（4 个，缺一个就出问题）
 
-# 只抓某年 / 某年某月
-python crawl.py --year 2026
-python crawl.py --year 2026 --month 11
+| 文件 | 作用 |
+|---|---|
+| `config.json` | 影视仓推送地址指向的文件：声明站点（type 1 静态源）+ 指向清单的 api |
+| `jrsf_list.json` | 清单本体：单卡片、19 条年份线路、5447 期 |
+| `crawl.py` | 每日增量抓取脚本（纯标准库，无需装包） |
+| `.github/workflows/crawl.yml` | 定时任务配置，每天北京时间 22 点跑一次 |
 
-# 试跑：只打印不写盘
-python crawl.py --year 2026 --month 11 --dry-run --limit 3
+引用关系很纯粹：`config.json` 的 `api` → `jrsf_list.json`；`crawl.py` / `crawl.yml` 只读写 `jrsf_list.json`。**其余文件都不参与播放链路，删掉不影响使用。**
 
-# 校验已有地址，失效的用 vdn 接口重新解析
-python crawl.py --refresh --limit 50
-```
+### 建议删除的旧文件（共约 5.7 MB）
 
-### 生成播放列表（m3u / txt / 精简 list）
+| 文件 | 大小 | 为什么可以删 |
+|---|---|---|
+| `jrsf.json` | 3.2 MB | 早期原始数据导出，已无用 |
+| `jrsf.m3u` | 900 KB | 旧方案产物：把 5023 期节目当 5023 个**直播频道**，会拖死直播页和整个配置加载 |
+| `jrsf.txt` | 737 KB | 旧文本清单 |
+| `jrsf_2009.m3u` ~ `jrsf_2026.m3u` | 合计 ~918 KB | 18 个按年拆的 m3u，旧方案残留 |
+| `make_m3u.py` | 12 KB | 生成上述 m3u 的旧脚本 |
+| `jrsf.js` | 9 KB | type3 远程 JS 爬虫测试（见「踩坑记录」，本内核跑不了） |
+| `config-js.json` | 665 B | 配合上面那份 JS 的配置 |
+| `影视仓配置_今日说法.json` | — | 旧配置副本，与 `config.json` 重复 |
 
-```bash
-python make_m3u.py                            # 全量：jrsf.m3u + jrsf.txt + 18 个分年文件 + jrsf_list.json
-python make_m3u.py --ep-order desc            # 线路（年份）内改成最新一期在前
-python make_m3u.py --recent 3                 # 只导最近 3 年
-python make_m3u.py --no-year-files --no-txt   # 只要全量 m3u
-python make_m3u.py --bom                      # 给老播放器加 UTF-8 BOM
-```
+批量删除技巧：在仓库页面按键盘 **`.`** 打开 github.dev 网页编辑器，框选文件一次删掉再提交，比一个个点快得多。
 
-生成规则：
+删完后仓库约 **811 KB**，配置地址不变（被删的都是孤儿文件）。
 
-- 只写「分组 / 显示名 / 播放地址」三样；简介、封面、时长一概不写（`jrsf_list.json` 也去掉了 `vod_pic` / `vod_content` / `vod_actor`）。
-- 显示名 = `日期 副标题`，去掉重复的「今日说法」前缀。
-- m3u 用 `group-title="2026年"` 分组，txt 用 `2026年,#genre#` 分组，组内新 → 旧。
-- `jrsf_list.json` 的结构是「**1 个分类 + 1 个卡片 + 每年一条线路**」：
+---
 
-```json
+## 三、清单结构（`jrsf_list.json`）
+
+```jsonc
 {
-  "class": [{"type_id": "jrsf", "type_name": "今日说法"}],
+  "class": [{"type_id": "1", "type_name": "今日说法"}],
+  "page": 1, "pagecount": 1, "limit": "1", "total": 1,   // 一张卡片，这 4 个字段必须齐全
   "list": [{
     "vod_id": "jrsf",
-    "vod_name": "今日说法",
-    "vod_remarks": "5023期",
-    "vod_year": "2009-2026",
-    "vod_play_from": "2026年$$$2025年$$$…$$$2009年",
-    "vod_play_url": "01 01-04 副标题$url#02 …#198 11-17 …$$$09月…$$$…"
+    "vod_name": "今日说法 历年(2008-2026)",
+    "vod_pic": "...",            // 封面，缺了卡片是空白框，App 看着像"没识别"
+    "vod_year": "2008-2026",
+    "vod_remarks": "5447期",
+    "vod_play_from": "2008年$$$2009年$$$……$$$2026年",   // 19 条线路名，$$$ 分隔
+    "vod_play_url": "2008-07.21 灼伤的童年$http://…#2008-07.22 xxx$http://…$$$$$$……"
   }]
 }
 ```
 
-  - `$$$` 分隔线路，线路名就是年份，新版内核在详情页顶部显示为「线路1 / 线路2 …」；
-  - `#` 分隔集数，编号按日期**正序**（`01` = 当年最早一期）；想要最新在前加 `--ep-order desc`；
-  - 新增年份时脚本自动多一条线路，配置和影视仓都不用动。
+分隔符规范（写错必炸）：
 
-行为说明：
+| 符号 | 含义 |
+|---|---|
+| `$$$` | 线路分隔（这里是「年份」分隔） |
+| `#` | 集与集之间的分隔 |
+| `$` | 集名与播放地址之间的分隔（每集只能出现一次） |
 
-- **只追加**：按 `date` 去重，已存在的期数绝不覆盖，没有新节目就**不写文件**（Actions 也就不会产生空提交）。
-- **按月抓取**：央视接口 `d=YYYYMM` 偶尔跨月返回，脚本按 `time` 字段严格过滤，且每月一页（100 条）足够覆盖全月。
-- **播放地址**：默认用 `guid` 直接拼 CDN 规律地址（实测与 vdn 接口返回的 `hls_url` 完全一致），加 `--resolve` 才逐条走接口。
-- 单月请求失败只告警不中断；全部失败才返回非 0。
+集名统一格式：`YYYY-MM.DD 标题`，例如 `2026-11.17 车顶跌落理赔之争`。
+年份内按播出日期升序（旧 → 新），所以最新一期永远在该年线路的最后一集。
 
-## GitHub Actions
+---
 
-`.github/workflows/crawl.yml` 每天两次自动运行：抓取 → 生成 m3u / txt / list → 一起提交：
+## 四、当前 19 条年份线路
 
-| 触发 | 时间 | 说明 |
-| --- | --- | --- |
-| `schedule` | 北京 13:00 | 央视约 12:38 上线当天节目 |
-| `schedule` | 北京 22:00 | 兜底 |
-| `workflow_dispatch` | 手动 | 可选 `auto / backfill / year / refresh` |
+| 线路 | 集数 | 首集 | 末集 |
+|---|---|---|---|
+| 2008年 | 132 | 2008-07.21 灼伤的童年 | 2008-12.31 谁动了我的照片 |
+| 2009年 | 326 | 2009-01.04 触电 | 2009-12.31 谁的钱 |
+| 2010年 | 315 | 2010-01.02 过节 | 2010-12.30 18岁男孩的八封遗书 |
+| 2011年 | 338 | 2011-01.04 十六年的牵挂 | 2011-12.30 陷阱 |
+| 2012年 | 299 | 2012-01.02 最美中国人 | 2012-12.30 409疑案 |
+| 2013年 | 288 | 2013-01.04 校园里的黑手 | 2013-12.31 偷婴儿的母亲 |
+| 2014年 | 283 | 2014-01.01 "亡夫"归来 | 2014-12.31 迟到十八年（下） |
+| 2015年 | 311 | 2015-01.01 少女来信 | 2015-12.30 永不放弃的追捕 |
+| 2016年 | 269 | 2016-01.04 方子哥打官司 | 2016-12.30 上门女婿的苦恼 |
+| 2017年 | 283 | 2017-01.03 女儿的意外 | 2017-12.31 乡村警察故事 |
+| 2018年 | 312 | 2018-01.02 假证的冰山 | 2018-12.29 夜归人 |
+| 2019年 | 309 | 2019-01.02 瓮中捉鳖 | 2019-12.31 二十年 法治点滴（下） |
+| 2020年 | 272 | 2020-01.02 赴汤蹈火 | 2020-12.31 疑点 |
+| 2021年 | 322 | 2021-01.04 押金 | 2021-12.31 雪域格桑花 |
+| 2022年 | 312 | 2022-01.04 三千元的代价 | 2022-12.30 岳父的赔偿金（下） |
+| 2023年 | 318 | 2023-01.03 父债子还的背后 | 2023-12.29 巨额黄金丢失之谜 |
+| 2024年 | 316 | 2024-01.02 被追责的处方药 | 2024-12.31 古稀老人的归宿 |
+| 2025年 | 244 | 2025-01.02 两条狗引发的大案（上） | 2025-12.31 被贩卖的快递信息 |
+| 2026年 | 198 | 2026-01.04 AI作图引风波 | 2026-11.17 车顶跌落理赔之争 |
 
-### 首次使用必做两件事
+**数据边界**：央视网在线流最早只到 **2008-07-21**；1999–2007 年的节目当年确实播出过，但在线点播源不存在（老接口 `videolistByColumnId`、`videolistById` 均已废弃，返回 errcode 1100/1001）。所以 2008 年只有半年。
 
-1. **开写权限**：仓库 → `Settings` → `Actions` → `General` → `Workflow permissions` → 选 **Read and write permissions** → `Save`。
-   没开这步，`git push` 会报 `403`。
-2. **手动跑一次**：`Actions` → 左侧 `今日说法自动增量` → 右侧 `Run workflow`：
-   - 仓库里还没有 `jrsf.json` 时，选 `backfill` 建全量；
-   - 之后日常留空（`auto`）即可，Actions 只会追加当天新的一期。
+---
 
-### 日志里会看到
+## 五、自动更新是怎么跑的
+
+### 数据链路
+
+1. **取节目列表**
+   `https://api.cntv.cn/NewVideo/getVideoListByColumn?id=TOPC1451464665008914&n=100&sort=desc&p={页}&mode=0&serviceId=tvcctv`
+   → 返回 `data.total` 与 `data.list`，每期带 `title / time / guid / image / length / brief`。
+   （`TOPC1451464665008914` 是《今日说法》栏目 ID 回调过来的值，`TOPC1451557052519584` 是《百家讲坛》，别混。）
+
+2. **guid → m3u8 直链**
+   `https://vdn.apps.cntv.cn/api/getHttpVideoInfo.do?pid={guid}`
+   → 取顶层 `hls_url`。实测不带 Referer/UA 也能 200，播放不强制防盗链。
+
+3. **落盘**
+   → 按 `time[:4]` 归年 → 清洗标题 → 按 `(播出日期, 清洗后标题)` 去重 → 追加到对应年份线路 → 年份内按日期升序 → 回写卡片。
+
+### 脚本行为要点
+
+- **只追加，不重写**：已有的 5447 期不会被重新抓一遍，每次只补新出现的几期
+- **去重键** = 播出日期 + 清洗后标题。同一天重复触发 Action 也不会写出重复条目（幂等，已实测）
+- **新年份自动建线路**：抓到 `2027-01.05` 这类条目时，若线路里没有「2027年」，脚本会自己 `[新线路] 新增 2027年` 并接在 2026 后面
+- **卡片元信息同步**：`vod_remarks`（期数）、`vod_year`（如 `2008-2027`）、`vod_name`、`vod_content` 一起更新
+- **标题清洗**：剥掉 `《今日说法》` 前缀、开头 8 位日期、`今日说法 2009年 第360期` 之类老格式前缀；标题内的 `#` `$` 替换成全角，防分隔符炸开
+
+### 定时任务
+
+`.github/workflows/crawl.yml`：
+
+- `cron: '0 14 * * *'` —— UTC 14:00 = **北京时间 22:00**，每天一次（改时间记得按 UTC 减 8 小时换算）
+- 支持手动触发（workflow_dispatch），可填 `pages` 参数
+- `permissions: contents: write` —— 没这个权限，跑完提交不上去
+- `concurrency: jrsf-crawl` —— 防止两次同时跑
+- `git diff --quiet` 判断：没新节目就直接跳过提交，不产生空 commit
+
+### 首次部署要做的三步
+
+1. 把 4 个文件传进仓库（`crawl.yml` 的路径必须是 `.github/workflows/crawl.yml`，在网页新建文件时直接敲这个带斜杠的名字，GitHub 会自动建目录）
+2. **Settings → Actions → General → Workflow permissions** 选 **Read and write**
+3. **Actions** 页 → 选「今日说法清单每日增量」→ **Run workflow** 跑一次，看日志里是否出现 `✅ 本次新增 N 期`
+
+手动运行示例日志：
 
 ```
-本地已有 5022 期（最新 2026-11-16）
-增量模式：抓最近 3 页
-抓取 100 期，新增 1 期，合计 5023 期
-已写入 jrsf.json：2009-08-01 → 2026-11-17
-已写出 jrsf.m3u：5023 期，920,065 字节
-已写出 jrsf.txt：754,586 字节
-  jrsf_2026.m3u：198 期
-  jrsf_2025.m3u：243 期
-  ……
-已写出 jrsf_list.json：18 年 / 18 条，751,633 字节
-年份分布：2026=198  2025=243  … 2009=97
+接口返回 200 条
+  [新增] 2026-11.17 车顶跌落理赔之争
+  [新增] 2026-11.16 疯狂打赏引发的犯罪
+  ...
+✅ 本次新增 5 期，现共 5447 期，年份：2008–2026（19条线路）
 ```
 
-没有新节目时是 `无新节目，jrsf.json 未改动`，m3u 内容也不会变，提交步骤自动跳过。
-
-## 影视仓配置（TVBox 内核 · 点播 + 直播）
-
-TVBox 内核**不要用 `type:3`**：它会把 `api` 指向的文件当 jar 解压，于是报「jar加载失败」。
-
-### 方式 A：`type:1` + 静态 `jrsf_list.json`（点播列表，推荐）
-
-`type:1` 是 TVBox 的「JSON 数据源」，由配置顶部的 `spider`（全局 jar）提供解析器，
-`api` 指向一个 JSON 文件即可 —— 可以是本地路径（`/sdcard/Download/jrsf_list.json`），
-也可以是网址。`jrsf_list.json` 就是按这个格式生成的：
-
-```json
-{"class":[{"type_id":"jrsf","type_name":"今日说法"}],
- "list":[{"vod_id":"jrsf","vod_name":"今日说法","vod_remarks":"5023期",
-          "vod_play_from":"2026年$$$2025年$$$…$$$2009年",
-          "vod_play_url":"01 01-04 副标题$https://…/main.m3u8#02 …$$$…"}]}
-```
-
-即：**1 个分类、1 个卡片，年份全部做成「线路」**，详情页顶部切换线路就是切年份。
-
-影视仓 → 设置 → 配置地址，填：
+再跑一次：
 
 ```
-https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json
+✅ 没有新节目，文件不改动
 ```
 
-（仓库里的 `影视仓配置_今日说法.json` 与它内容完全一致，填哪个都行）
+---
 
-`config.json` 关键部分：
+## 六、排查手册
 
-```json
-{
-  "spider": "https://gitee.com/yuxiaotian3061/tvbox/raw/master/spider.jar",
-  "sites": [{
-    "key": "jrsf",
-    "name": "今日说法 历年(2009-2026)",
-    "type": 1,
-    "api": "https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf_list.json",
-    "headers": {"User-Agent": "Mozilla/5.0 …", "Referer": "https://tv.cctv.com/"}
-  }]
-}
-```
+| 现象 | 原因 / 处理 |
+|---|---|
+| 只有「主页」标签，没有「今日说法」 | 配置没被接受。先确认仓库是 **public**；再清缓存重导入 |
+| 卡片是空白框 / 看着像没识别 | `vod_pic` 缺失。本仓库版本已带封面 |
+| 点开卡片详情变成另一年的节目 | 静态源多卡片时解析器落回 `list[0]`（详见踩坑记录）。必须保持「单卡片 + 年份线路」结构 |
+| 改完文件后 App 还是旧内容 | 加速前缀有缓存。`ghfast` / `raw` 可能延迟几分钟，jsDelivr 缓存约 12 小时。别立刻判失败 |
+| Actions 跑成功但没提交 | Workflow permissions 还是 Read only |
+| 直播页卡死、配置加载慢 | 一定是又混进了巨型 m3u（5023 个"直播频道"）。本版本配置里**不含 lives** |
+| 某一期打不开 | 该期央视侧已下架或 guid 失效；不影响其他期 |
 
-- **`spider` 必须留**：删掉它，`type:1` 就没有解析器，同样会报「jar加载失败」。
-- 列表只有 1 张卡片「今日说法」，点进去 **顶部是 18 条线路（2026年 … 2009年）**，切线路 = 切年份；
-  每条线路里是当年的全部期，编号 `01`、`02` … 按日期正序，点任意一期直接播央视 m3u8。
-- 明年 1 月 1 日起脚本自动多一条「2027年」线路，配置和影视仓都不用改。
-- 想让最新一期排在前面：`python make_m3u.py --ep-order desc` 再重新上传 `jrsf_list.json`。
+---
 
-### 方式 B：m3u / txt 直播源
+## 七、踩坑记录（省得以后再试一遍）
 
-| 想要什么 | 填这个地址（`你的用户名` 换成自己的） |
-| --- | --- |
-| 全部 18 年 5023 期（约 0.9 MB） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.m3u` |
-| 加载更快（txt 格式，约 0.75 MB） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.txt` |
-| 只要某一年（20~60 KB，秒开） | `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf_2026.m3u`（可换 2025、2024…） |
+以下都是在这个 App 的内核上实测过的死路，**不要再尝试**：
 
-填在「直播源管理」里即可，`config.json` 的 `lives` 里也已经配好前两个。
-加好后直播页会出现「2026年」…「2009年」共 18 个分组，点进去就是当期央视 m3u8。
+1. **静态多卡片不行**（一张站点出 N 张影片卡片）
+   列表网格能正常显示（封面、期数各年都对），但**点任意一张卡片，详情页标题/封面/选集全部回退到 `list[0]`（2008 年）**。
+   原因：真实动态接口的流程是「列表只给元信息 → 点开二次请求 `?ac=detail&ids=<vod_id>` 才返回播放地址」；静态 JSON 对 detail 请求只能回全量，该版本解析器直接取第一条 → 串成第一部。
+   已逐项排除：归年正确、URL 无跨卡片重复、`vod_id` 唯一、集名唯一、线路名唯一。
 
-电脑上验证：把地址丢进 PotPlayer / VLC / MX Player，能出播放列表就说明地址没问题。
+2. **静态多站点不行**（19 个 type1 站点各出一张卡）
+   公网配置合法、key 唯一、19 个清单地址全 200，但 App 站点管理**只保留 `sites[0]`**。去掉站点级 headers 后依旧只出第一条。
 
-> jsDelivr 对 `@main` 有约 12 小时缓存，当天新上线的一期可能延迟半天出现。
-> 想立刻看到，把 `https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/` 换成
-> `https://raw.githubusercontent.com/你的用户名/jinrishuofa/main/`（前提是你的网络能访问 raw）。
-> 改完文件后也可以访问 `https://purge.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json` 手动刷缓存。
+3. **type3 远程 JS 爬虫不行**
+   本内核的 `spider.jar`（约 604 KB，2024-02）里 889 个类**全是传统 Java 爬虫**，没有 QuickJS / Python runtime；`parser.JsonBasic` 之类只是页面解析片段。现象是「站点名显示、卡片全空」。
+   注意：App 里饭太硬、王二小这类 type3 源能用，只说明 jar 内 Java 爬虫能跑，**不代表支持远程 js**。
 
-## 影视仓配置（FongMi 内核 · 点播体验）
+4. **静态源加 `headers` 无效**，`type 1` 不吃 headers。
 
-FongMi 内核（FongMi TV 3.x、部分影视仓版本）支持 QuickJS 蜘蛛，用 `config-js.json`，或把下面这段加进 `sites`：
+5. **`lives` 千万别塞节目单**。5023 期当直播频道 = 920 KB 的 m3u，会拖死直播页和配置加载，也常导致站点加载失败。
 
-```json
-{
-  "key": "jrsf",
-  "name": "今日说法",
-  "type": 3,
-  "api": "https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.js",
-  "searchable": 1,
-  "quickSearch": 1,
-  "filterable": 1,
-  "style": {"type": "rect", "ratio": 0.75},
-  "ext": {"data_url": "https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/jrsf.json"}
-}
-```
+结论：**静态源下「单卡片 + `$$$` 年份线路」是唯一可行且不串集的形态**，也就是本仓库现在的样子。
 
-部署前把 `jrsf.js` 顶部的 `OWNER` 改成你的 GitHub 用户名（`REPO` 保持 `jinrishuofa`）。
+---
 
-### 界面效果（FongMi 内核）
+## 八、想升级成「19 张年份卡片」怎么办
 
-（TVBox 内核只有直播列表，没有下面这些）
+静态 JSON 天生做不到「主页 19 张卡片 + 点哪年只加载哪年」，因为静态文件对任何 `ac=detail&ids=` 请求只能返回同一份全量数据，解析器只能取第一条。
 
-- 首页：分类为「最新上线」+ `2026年`、`2025年` …… `2009年`（按数据自动生成）
-- 分类页：每页 30 张卡片，右上角显示日期与时长；可按「月份」筛选
-- 详情页：单集「正片」
-- 播放：直接输出 m3u8（`parse=0`，不做解析）
-- 搜索：匹配标题 / 日期 / 简介
+真要做成卡片网格，需要一个**动态接口**（按 `ids` 返回该年份的数据）。思路和验证过的实现：
 
-## 常见问题
+- Cloudflare Worker 承载一个 type 1 动态接口：`?ac=list` 返回 19 张卡片元信息、`?ac=detail&ids=jrsf2015` 精确返回 2015 年 311 集
+- 已用 `wrangler deploy --temporary` 实测通过，逻辑正确
+- 代价：多一个需要维护的线上服务（免费额度够用，但 `workers.dev` 在国内可达性需自测）
 
-| 现象 | 排查 |
-| --- | --- |
-| `type:3` 报「**jar加载失败**」 | 客户端是 TVBox 内核，只会把 api 当 jar 解压，不支持 js 蜘蛛 → 改用 `type:1` + `jrsf_list.json`（见「影视仓配置」方式 A） |
-| 卡片点进去怎么只看某一年的 | 详情页顶部的「线路1 / 线路2 …」就是年份，从左到右 2026年 → 2009年 |
-| 切了线路但集数没变 | 内核缓存了上次的详情页，退出卡片再重进；或清一下 App 缓存 |
-| 电视端提示「拉取失败」/ 配置地址加载不出来 | 电视访问不了 `raw.githubusercontent.com`，把配置地址换成 jsDelivr 那份：`https://cdn.jsdelivr.net/gh/你的用户名/jinrishuofa@main/config.json` |
-| 直播列表能出来，但没有封面/简介 | m3u 是频道列表形态，本来就不带封面；要卡片和搜索得换 FongMi 内核 + `jrsf.js` |
-| m3u 里没有当天最新一期 | jsDelivr 对 `@main` 有约 12 小时缓存；等半天，或改用 `raw.githubusercontent.com` 地址 |
-| 直播页加载很慢 / 卡住 | 全量 m3u 有 5023 期，低配盒子改用分年文件：`jrsf_2026.m3u`、`jrsf_2025.m3u` |
-| FongMi 内核里点开一片空白 | 浏览器打开 `api` 那个 `.js` 地址确认能下载；再打开 `data_url` 确认是 JSON 数组 |
-| 有卡片但一播放就失败 | 用 `python crawl.py --refresh --limit 20` 校正地址；或直接浏览器试 `vod` 链接 |
-| 某天的节目没更新 | 央视有时晚于 13:00 上线，22:00 那次会补；也可手动 `Run workflow` |
-| Actions 报 403 / 无法 push | 就是上面「开写权限」那步没做 |
-| 抓取整体失败 | 央视接口改版了，看 `crawl.py` 顶部注释里的两个接口地址，按新参数改 `list_month()` |
-| 想从零重建数据 | 删除 `jrsf.json` 后手动跑 `backfill`，再跑 `python make_m3u.py` |
+如果哪天想折腾，再单独讨论。
+
+> （注：部分内容由豆包 AI 生成）
