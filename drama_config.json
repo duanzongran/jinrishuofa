@@ -1,22 +1,40 @@
 {
-  "spider": "",
-  "wallpaper": "",
-  "sites": [
-    {
-      "key": "cctvdrama",
-      "name": "央视剧集",
-      "type": 3,
-      "api": "https://ghfast.top/https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/cctv_drama.js",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 0,
-      "changeable": 0,
-      "style": { "type": "rect", "ratio": 0.75 },
-      "ext": ""
-    }
-  ],
-  "parses": [],
-  "flags": [],
-  "shunt": [],
-  "ads": []
+ "spider": "",
+ "wallpaper": "",
+ "sites": [
+  {
+   "key": "cctvdrama",
+   "name": "央视剧集",
+   "type": 3,
+   "api": "https://ghfast.top/https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/cctv_drama.js",
+   "searchable": 1,
+   "quickSearch": 1,
+   "filterable": 0,
+   "changeable": 0,
+   "style": {
+    "type": "rect",
+    "ratio": 0.75
+   },
+   "ext": ""
+  },
+  {
+   "key": "jrsf",
+   "name": "今日说法",
+   "type": 3,
+   "api": "https://ghfast.top/https://raw.githubusercontent.com/duanzongran/jinrishuofa/main/jrsf.js",
+   "searchable": 1,
+   "quickSearch": 1,
+   "filterable": 0,
+   "changeable": 0,
+   "style": {
+    "type": "rect",
+    "ratio": 0.75
+   },
+   "ext": ""
+  }
+ ],
+ "parses": [],
+ "flags": [],
+ "shunt": [],
+ "ads": []
 }
