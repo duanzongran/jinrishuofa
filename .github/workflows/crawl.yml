@@ -1,21 +1,21 @@
-name: 今日说法清单每日增量
+name: 央视剧集+今日说法 每日增量
 
 on:
   schedule:
-    # UTC 14:00 = 北京时间 22:00，每天一次
-    - cron: '0 14 * * *'
+    # UTC 13:30 = 北京时间 21:30，每天一次（今日说法晚间播完即可抓到）
+    - cron: '30 13 * * *'
   workflow_dispatch:
     inputs:
       pages:
         description: '抓取前几页（每页100条）'
         required: false
-        default: '2'
+        default: '3'
 
 permissions:
   contents: write
 
 concurrency:
-  group: jrsf-crawl
+  group: cctv-drama-crawl
   cancel-in-progress: false
 
 jobs:
@@ -30,20 +30,22 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 抓取并增量更新
+      - name: 抓取新节目并重建 js
         env:
-          PAGES: ${{ github.event.inputs.pages || '2' }}
+          PAGES: ${{ github.event.inputs.pages || '3' }}
           DATA_FILE: jrsf_list.json
+          TV_FILE: tv_catalog.json
+          OUT_JS: cctv_drama.js
         run: python crawl.py
 
       - name: 提交变更
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- jrsf_list.json; then
+          if git diff --quiet -- jrsf_list.json cctv_drama.js; then
             echo "没有新节目，无需提交"
             exit 0
           fi
-          git add jrsf_list.json
-          git commit -m "自动更新今日说法清单 $(date -u +%Y-%m-%d)"
+          git add jrsf_list.json cctv_drama.js
+          git commit -m "自动更新今日说法 $(date -u +%Y-%m-%d)"
           git push
