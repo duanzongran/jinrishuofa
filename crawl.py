@@ -35,7 +35,7 @@ LIST_API = ("https://api.cntv.cn/NewVideo/getVideoListByColumn"
             "?id={cid}&n={n}&sort=desc&p={p}&mode=0&serviceId=tvcctv")
 VDN_API = "https://vdn.apps.cntv.cn/api/getHttpVideoInfo.do?pid={guid}"
 
-# 播放地址压缩：两条普通 m3u8 主机 + 标准路径
+# 播放地址压缩：两条正常可播的主机（cnTV 会随机下发 cdn20 等坏主机，必须归一化）
 HOSTS = ["https://newcntv.qcloudcdn.com", "https://hls.cntv.lxdns.com"]
 TPL = "/asp/hls/main/0303000a/3/default/{guid}/main.m3u8?maxbr=2048"
 G32 = re.compile(r"([0-9a-f]{32})")
@@ -147,15 +147,64 @@ def resolve_hls(guid):
     return ((d or {}).get("hls_url") or "").strip()
 
 
+def host_url(guid, i):
+    return HOSTS[i] + TPL.replace("{guid}", guid)
+
+
+def verify(url, timeout=15):
+    """真能播：m3u8 -> 变体 -> 首切片须是真 TS（0x47）且大于 1500 字节"""
+    import urllib.parse as up
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA,
+                                                   "Referer": "https://tv.cctv.com/"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", "ignore")
+        if "EXT-X-KEY" in body:                     # 加密切片，盒子多半解不开
+            return False
+        var = [l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#")]
+        if not var:
+            return False
+        vu = up.urljoin(url, var[0])
+        with urllib.request.urlopen(urllib.request.Request(vu, headers={"User-Agent": UA,
+                                        "Referer": "https://tv.cctv.com/"}), timeout=timeout) as r:
+            vb = r.read().decode("utf-8", "ignore")
+        seg = [l.strip() for l in vb.splitlines() if l.strip() and not l.startswith("#")]
+        if not seg:
+            return False
+        su = up.urljoin(vu, seg[0])
+        with urllib.request.urlopen(urllib.request.Request(su, headers={"User-Agent": UA,
+                                        "Referer": "https://tv.cctv.com/"}), timeout=timeout) as r:
+            head = r.read(3000)
+        return len(head) > 1500 and head[0] == 0x47
+    except Exception:
+        return False
+
+
+def pick_url(guid, hint=""):
+    """拿到一个真实可播的地址：先试接口给的（若主机可信），再轮询两条正常主机"""
+    cands = []
+    m = G32.search(hint or "")
+    if m and any((hint or "").startswith(h) for h in HOSTS):
+        cands.append(hint)
+    for i in range(len(HOSTS)):
+        u = host_url(guid, i)
+        if u not in cands:
+            cands.append(u)
+    for u in cands:
+        if verify(u):
+            return u
+    return ""
+
+
 # ---------------- 生成 js ----------------
 def encode(url):
+    """任何 cntv 主机的标准路径地址都归一化成两条正常主机的压缩形式"""
     m = G32.search(url or "")
     if not m:
         return [9, url]
     g = m.group(1)
-    for i, h in enumerate(HOSTS):
-        if url.startswith(h) and TPL.replace("{guid}", g) in url:
-            return [i, g]
+    if "/asp/hls/main/0303000a/3/" in (url or ""):
+        return [0, g]
     return [9, url]
 
 
@@ -273,6 +322,23 @@ def main():
         for n, _ in eps:
             existing.add(ep_key(n))
 
+    # 1) 先修历史数据里主机不对的地址（例如 hls.cntv.cdn20.com，实测 403）
+    fixed = 0
+    for y, eps in lines.items():
+        for i, (n, u) in enumerate(eps):
+            if any(u.startswith(h) for h in HOSTS):
+                continue
+            m = G32.search(u or "")
+            if not m:
+                continue
+            good = pick_url(m.group(1), u)
+            if good:
+                eps[i] = [n, good]
+                fixed += 1
+                print(f"  [修主机] {n[:26]}")
+    if fixed:
+        print(f"修正 {fixed} 条主机异常地址")
+
     recent = fetch_recent()
     print(f"接口返回 {len(recent)} 期")
 
@@ -281,9 +347,9 @@ def main():
         key = (date_str, title)
         if key in existing:
             continue
-        hls = resolve_hls(guid)
+        hls = pick_url(guid, resolve_hls(guid))
         if not hls:
-            print(f"  [skip] 取不到播放地址：{date_str} {title}")
+            print(f"  [skip] 取不到可播地址：{date_str} {title}")
             continue
         year = date_str[:4]
         if year not in lines:
