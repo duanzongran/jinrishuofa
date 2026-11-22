@@ -58,10 +58,6 @@ https://gh-proxy.com/https://raw.githubusercontent.com/duanzongran/jinrishuofa/m
 | `crawl.py` | 每日增量抓取 + 校验 + 重建 js |
 | `.github/workflows/crawl.yml` | 定时任务，每天北京时间 21:30 跑 |
 
-### 可以删的旧文件
-
-`config.json`（旧的今日说法单卡方案配置）、`jrsf.js`（旧的独立 js，已并入 `cctv_drama.js`）、旧的 m3u / txt / 备份 json 等，都不参与播放链路，删掉不影响使用。
-
 ---
 
 ## 三、js 结构（`cctv_drama.js`）
