@@ -2,8 +2,8 @@ name: 央视剧集+今日说法 每日增量
 
 on:
   schedule:
-    # UTC 13:30 = 北京时间 21:30，每天一次（今日说法晚间播完即可抓到）
-    - cron: '30 13 * * *'
+    # UTC 06:00 = 北京时间 14:00，每天一次（今日说法晚间播完即可抓到）
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       pages:
